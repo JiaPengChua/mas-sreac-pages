@@ -9,16 +9,22 @@
     ></script>
 
     <script>
-      // Set false once this is working to drop the on-page debug panel.
       const SREAC_DEBUG = true;
 
-      // Used when the AI Agent has not populated sreac_action — lets the flow
-      // work before the code tool is wired up. Remove once the tool is live, so
-      // a stale URL can never be silently used in place of the real one.
+      // "navigate" — send the browser to the MAS endpoint and let its own
+      //              self-submitting form do the POST. Needs only pnr and
+      //              lastName from the AI Agent. No code tool required.
+      // "post"     — rebuild the form here and POST straight to Amadeus. Needs
+      //              sreac_action from a code tool (or a SET step).
+      const SREAC_MODE = "navigate";
+
+      // navigate mode
+      const SREAC_ENDPOINT = "https://sandbox-api.malaysiaairlines.com/refx/sreac/redirection/";
+      const SREAC_ENDPOINT_HOSTS = ["sandbox-api.malaysiaairlines.com", "api.malaysiaairlines.com"];
+
+      // post mode
       const SREAC_DEFAULT_URL =
         "https://uat.digital.airline.amadeus.com/mh/servicing/self-reaccommodation/retrieve?lang=en-GB";
-
-      // Hard allow-list for the POST target.
       const SREAC_ALLOWED_HOSTS = [
         "uat.digital.airline.amadeus.com",
         "digital.airline.amadeus.com",
@@ -51,6 +57,10 @@
         el.scrollTop = el.scrollHeight;
       }
 
+      function hostAllowed(url, hosts) {
+        return hosts.includes(new URL(url).hostname);
+      }
+
       /* -------------------------------------------------------------- POST */
       function postForm(method, actionUrl, fields) {
         const form = document.createElement("form");
@@ -73,45 +83,60 @@
       }
 
       /* ------------------------------------------------------------ SREAC */
+      function sreacFields(globals) {
+        // The code tool, when present, puts the parsed hidden inputs in
+        // sreacForm. Otherwise use the two values the Playbook captured.
+        if (globals.sreacForm) {
+          const parsed =
+            typeof globals.sreacForm === "string"
+              ? JSON.parse(globals.sreacForm)
+              : globals.sreacForm;
+          if (parsed && parsed.recLoc && parsed.lastName) return parsed;
+          note("sreacForm carried no recLoc/lastName — falling back to pnr + lastName");
+        }
+        return { recLoc: globals.pnr, lastName: globals.lastName };
+      }
+
+      function navigateToEndpoint(fields, lang) {
+        if (!hostAllowed(SREAC_ENDPOINT, SREAC_ENDPOINT_HOSTS)) {
+          throw new Error("SREAC_ENDPOINT host is not allow-listed");
+        }
+        const query = new URLSearchParams({
+          identifier: fields.recLoc,
+          lastName: fields.lastName,
+          lang: lang || "en-GB",
+        });
+        const target = SREAC_ENDPOINT + "?" + query.toString();
+        note("navigating to " + target);
+        window.location.href = target;
+      }
+
+      function postToAmadeus(globals, fields) {
+        // "NONE" is the code tool's failure signal. Do not fall back to the
+        // hardcoded URL there — posting anyway would look identical to success.
+        const raw = globals.sreac_action;
+        if (raw === "NONE") {
+          throw new Error("The AI Agent could not resolve a redirect target (sreac_action=NONE)");
+        }
+        const url = raw || SREAC_DEFAULT_URL;
+        if (!raw) {
+          note("sreac_action not set — FALLING BACK to the hardcoded Amadeus URL. "
+            + "This is not the live value from the API.", true);
+        }
+        if (!hostAllowed(url, SREAC_ALLOWED_HOSTS)) {
+          throw new Error("Refusing to POST to un-allow-listed host: " + new URL(url).hostname);
+        }
+        const method = (globals.sreac_method || "post").toUpperCase();
+        note("POST " + url + " " + JSON.stringify(fields));
+        postForm(method, url, fields);
+      }
+
       function handleSreac(eventName, event) {
-        note("handling " + eventName + " as self-reac");
+        note("handling " + eventName + " as self-reac, mode=" + SREAC_MODE);
 
         try {
           const globals = event?.user_data?.global || {};
-          const method = (globals.sreac_method || "post").toUpperCase();
-          // "NONE" means the code tool ran and its fetch failed. Do NOT fall
-          // back to the hardcoded URL there — posting anyway would send the
-          // customer to Amadeus on data the API never confirmed, and would look
-          // identical to success. Only an absent value uses the fallback.
-          const raw = globals.sreac_action;
-          if (raw === "NONE") {
-            throw new Error("The AI Agent could not resolve a redirect target (sreac_action=NONE)");
-          }
-          const url = raw || SREAC_DEFAULT_URL;
-
-          if (!url) throw new Error("No sreac_action on the event and no default URL");
-          if (!raw) {
-            note("sreac_action not set by the AI Agent — FALLING BACK to the "
-              + "hardcoded URL. This is not the live value from the API.", true);
-          }
-
-          const host = new URL(url).hostname;
-          if (!SREAC_ALLOWED_HOSTS.includes(host)) {
-            throw new Error("Refusing to POST to un-allow-listed host: " + host);
-          }
-
-          // The code tool puts the parsed hidden inputs in sreacForm as JSON.
-          // Without it, fall back to the two globals the Playbook captured.
-          let fields;
-          if (globals.sreacForm) {
-            fields =
-              typeof globals.sreacForm === "string"
-                ? JSON.parse(globals.sreacForm)
-                : globals.sreacForm;
-          } else {
-            note("sreacForm empty — building fields from pnr + lastName");
-            fields = { recLoc: globals.pnr, lastName: globals.lastName };
-          }
+          const fields = sreacFields(globals);
 
           if (!fields.recLoc || !fields.lastName) {
             throw new Error(
@@ -119,8 +144,11 @@
             );
           }
 
-          note("POST " + url + " " + JSON.stringify(fields));
-          postForm(method, url, fields);
+          if (SREAC_MODE === "navigate") {
+            navigateToEndpoint(fields, globals.lang);
+          } else {
+            postToAmadeus(globals, fields);
+          }
         } catch (err) {
           note("self-reac handler error: " + err.message, true);
         }
@@ -154,11 +182,9 @@
       }
 
       /* ---------------------------------------------------- event routing */
-      // Ada looks the callback up by the event name configured on the Handoff.
-      // Until that name is confirmed, a Proxy answers for ANY name: every event
-      // gets logged with its payload, and anything that isn't flight_booking is
-      // treated as the self-reac redirect. Replace with a plain object keyed by
-      // the real name once you can see it in the log.
+      // Ada looks the callback up by the event name set on the Handoff. Until
+      // that name is confirmed, a Proxy answers for ANY name: every event is
+      // logged, and anything that isn't flight_booking is treated as self-reac.
       const handlers = { flight_booking: handleBooking };
 
       const eventCallbacks = new Proxy(handlers, {
@@ -183,8 +209,7 @@
 
       if (SREAC_DEBUG) {
         window.addEventListener("DOMContentLoaded", () => {
-          note("page ready — waiting for an Ada event");
-          note("handle: malaysiaairlines-sandbox, origin: " + location.origin);
+          note("page ready, mode=" + SREAC_MODE + " — waiting for an Ada event");
         });
       }
     </script>
