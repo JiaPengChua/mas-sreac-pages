@@ -11,20 +11,26 @@
     <script>
       const SREAC_DEBUG = true;
 
-      // "navigate" — send the browser to the MAS endpoint and let its own
-      //              self-submitting form do the POST. Needs only pnr and
-      //              lastName from the AI Agent. No code tool required.
-      // "post"     — rebuild the form here and POST straight to Amadeus. Needs
-      //              sreac_action from a code tool (or a SET step).
+      // "navigate" — send the browser straight to the URL the Playbook built in
+      //              sreac_action. The MAS endpoint returns a self-submitting
+      //              form, so it performs the POST to Amadeus itself.
+      // "post"     — rebuild the form here and POST straight to Amadeus.
+      //              Needs sreac_action to be an Amadeus URL, from a code tool.
       const SREAC_MODE = "navigate";
 
-      // navigate mode
+      // navigate mode: the MAS endpoint, used to build the URL when the AI Agent
+      // did not supply sreac_action. Confirmed 2026-08-25: this instance's
+      // Unified Reasoning Engine SKIPS v2 SET steps, so a Playbook SET cannot
+      // populate sreac_action — only a tool run can. pnr and lastName do arrive.
       const SREAC_ENDPOINT = "https://sandbox-api.malaysiaairlines.com/refx/sreac/redirection/";
-      const SREAC_ENDPOINT_HOSTS = ["sandbox-api.malaysiaairlines.com", "api.malaysiaairlines.com"];
+
+      // Hosts sreac_action is allowed to point at.
+      const SREAC_ENDPOINT_HOSTS = [
+        "sandbox-api.malaysiaairlines.com",
+        "api.malaysiaairlines.com",
+      ];
 
       // post mode
-      const SREAC_DEFAULT_URL =
-        "https://uat.digital.airline.amadeus.com/mh/servicing/self-reaccommodation/retrieve?lang=en-GB";
       const SREAC_ALLOWED_HOSTS = [
         "uat.digital.airline.amadeus.com",
         "digital.airline.amadeus.com",
@@ -97,16 +103,45 @@
         return { recLoc: globals.pnr, lastName: globals.lastName };
       }
 
-      function navigateToEndpoint(fields, lang) {
-        if (!hostAllowed(SREAC_ENDPOINT, SREAC_ENDPOINT_HOSTS)) {
-          throw new Error("SREAC_ENDPOINT host is not allow-listed");
+      function buildEndpointUrl(globals) {
+        const fields = sreacFields(globals);
+        if (!fields.recLoc || !fields.lastName) {
+          throw new Error(
+            "No sreac_action, and no pnr/lastName to build one from. globals seen: "
+            + Object.keys(globals).join(", ")
+          );
         }
         const query = new URLSearchParams({
           identifier: fields.recLoc,
           lastName: fields.lastName,
-          lang: lang || "en-GB",
+          lang: globals.lang || "en-GB",
         });
-        const target = SREAC_ENDPOINT + "?" + query.toString();
+        return SREAC_ENDPOINT + "?" + query.toString();
+      }
+
+      function navigateToAction(globals) {
+        const supplied = globals.sreac_action;
+        let target;
+
+        if (supplied && supplied !== "NONE") {
+          // An unresolved template means a Playbook SET wrote the literal token
+          // rather than the value. Navigating would send a broken PNR to MAS.
+          if (supplied.includes("{{") || supplied.includes("}}")) {
+            note("sreac_action holds an unresolved token — building the URL here "
+              + "instead: " + supplied, true);
+            target = buildEndpointUrl(globals);
+          } else {
+            target = supplied;
+          }
+        } else {
+          note("sreac_action not supplied — building the URL from pnr + lastName");
+          target = buildEndpointUrl(globals);
+        }
+
+        if (!hostAllowed(target, SREAC_ENDPOINT_HOSTS)) {
+          throw new Error("Refusing to navigate to un-allow-listed host: " + new URL(target).hostname);
+        }
+
         note("navigating to " + target);
         window.location.href = target;
       }
@@ -114,14 +149,9 @@
       function postToAmadeus(globals, fields) {
         // "NONE" is the code tool's failure signal. Do not fall back to the
         // hardcoded URL there — posting anyway would look identical to success.
-        const raw = globals.sreac_action;
-        if (raw === "NONE") {
-          throw new Error("The AI Agent could not resolve a redirect target (sreac_action=NONE)");
-        }
-        const url = raw || SREAC_DEFAULT_URL;
-        if (!raw) {
-          note("sreac_action not set — FALLING BACK to the hardcoded Amadeus URL. "
-            + "This is not the live value from the API.", true);
+        const url = globals.sreac_action;
+        if (!url || url === "NONE") {
+          throw new Error("The AI Agent could not resolve a redirect target (sreac_action=" + url + ")");
         }
         if (!hostAllowed(url, SREAC_ALLOWED_HOSTS)) {
           throw new Error("Refusing to POST to un-allow-listed host: " + new URL(url).hostname);
@@ -136,19 +166,19 @@
 
         try {
           const globals = event?.user_data?.global || {};
-          const fields = sreacFields(globals);
 
+          if (SREAC_MODE === "navigate") {
+            navigateToAction(globals);
+            return;
+          }
+
+          const fields = sreacFields(globals);
           if (!fields.recLoc || !fields.lastName) {
             throw new Error(
               "Missing recLoc/lastName. globals seen: " + Object.keys(globals).join(", ")
             );
           }
-
-          if (SREAC_MODE === "navigate") {
-            navigateToEndpoint(fields, globals.lang);
-          } else {
-            postToAmadeus(globals, fields);
-          }
+          postToAmadeus(globals, fields);
         } catch (err) {
           note("self-reac handler error: " + err.message, true);
         }
