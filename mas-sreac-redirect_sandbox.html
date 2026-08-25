@@ -79,15 +79,18 @@
         try {
           const globals = event?.user_data?.global || {};
           const method = (globals.sreac_method || "post").toUpperCase();
-          // The code tool writes "NONE" when its fetch fails, mirroring the
-          // booking flow — treat that as absent, not as a URL.
-          const live = globals.sreac_action && globals.sreac_action !== "NONE"
-            ? globals.sreac_action
-            : null;
-          const url = live || SREAC_DEFAULT_URL;
+          // "NONE" means the code tool ran and its fetch failed. Do NOT fall
+          // back to the hardcoded URL there — posting anyway would send the
+          // customer to Amadeus on data the API never confirmed, and would look
+          // identical to success. Only an absent value uses the fallback.
+          const raw = globals.sreac_action;
+          if (raw === "NONE") {
+            throw new Error("The AI Agent could not resolve a redirect target (sreac_action=NONE)");
+          }
+          const url = raw || SREAC_DEFAULT_URL;
 
           if (!url) throw new Error("No sreac_action on the event and no default URL");
-          if (!live) {
+          if (!raw) {
             note("sreac_action not set by the AI Agent — FALLING BACK to the "
               + "hardcoded URL. This is not the live value from the API.", true);
           }
