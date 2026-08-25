@@ -79,10 +79,18 @@
         try {
           const globals = event?.user_data?.global || {};
           const method = (globals.sreac_method || "post").toUpperCase();
-          const url = globals.sreac_action || SREAC_DEFAULT_URL;
+          // The code tool writes "NONE" when its fetch fails, mirroring the
+          // booking flow — treat that as absent, not as a URL.
+          const live = globals.sreac_action && globals.sreac_action !== "NONE"
+            ? globals.sreac_action
+            : null;
+          const url = live || SREAC_DEFAULT_URL;
 
           if (!url) throw new Error("No sreac_action on the event and no default URL");
-          if (!globals.sreac_action) note("sreac_action empty — using SREAC_DEFAULT_URL");
+          if (!live) {
+            note("sreac_action not set by the AI Agent — FALLING BACK to the "
+              + "hardcoded URL. This is not the live value from the API.", true);
+          }
 
           const host = new URL(url).hostname;
           if (!SREAC_ALLOWED_HOSTS.includes(host)) {
