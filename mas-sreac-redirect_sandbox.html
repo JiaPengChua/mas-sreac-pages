@@ -1,0 +1,124 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script
+      id="__ada"
+      data-handle="malaysiaairlines-sandbox"
+      src="https://static.ada.support/embed2.js"
+      async
+    ></script>
+
+    <script>
+      // The event name configured on the "Self-Reac redirection" handoff.
+      // Aliases are registered too, so the page works whichever one you picked —
+      // trim this to the single real name once confirmed.
+      const SREAC_EVENTS = ["sreac", "sreac_redirect", "self_reac", "selfReac", "self_reaccommodation"];
+
+      // Hard allow-list for the POST target. Without it, any global that lands
+      // in sreac_action can make this page POST the customer anywhere.
+      const SREAC_ALLOWED_HOSTS = [
+        "uat.digital.airline.amadeus.com",
+        "digital.airline.amadeus.com",
+      ];
+
+      function postForm(method, actionUrl, fields) {
+        const form = document.createElement("form");
+        form.method = method || "POST";
+        form.action = actionUrl;
+        form.target = "_self";
+        form.style.display = "none";
+
+        Object.entries(fields || {}).forEach(([key, value]) => {
+          if (value === undefined || value === null || value === "") return;
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = key;
+          input.value = typeof value === "string" ? value : JSON.stringify(value);
+          form.appendChild(input);
+        });
+
+        document.body.appendChild(form);
+        form.submit();
+      }
+
+      function handleSreac(event) {
+        console.log("self-reac redirect triggered from Ada", event);
+
+        try {
+          const globals = event?.user_data?.global || {};
+          const method = (globals.sreac_method || "post").toUpperCase();
+          const url = globals.sreac_action;
+
+          if (!url) {
+            throw new Error("No sreac_action URL on the event payload");
+          }
+
+          const host = new URL(url).hostname;
+          if (!SREAC_ALLOWED_HOSTS.includes(host)) {
+            throw new Error("Refusing to POST to un-allow-listed host: " + host);
+          }
+
+          // The code tool puts the parsed hidden inputs in sreacForm as JSON.
+          // If it isn't there, fall back to the two globals the playbook captured.
+          let fields;
+          if (globals.sreacForm) {
+            fields =
+              typeof globals.sreacForm === "string"
+                ? JSON.parse(globals.sreacForm)
+                : globals.sreacForm;
+          } else {
+            fields = { recLoc: globals.pnr, lastName: globals.lastName };
+          }
+
+          if (!fields.recLoc || !fields.lastName) {
+            throw new Error("Missing recLoc or lastName");
+          }
+
+          console.log("Redirecting via", method, "to", url, fields);
+
+          postForm(method, url, fields);
+        } catch (err) {
+          console.error("self-reac handler error:", err);
+        }
+      }
+
+      const eventCallbacks = {
+        flight_booking: (event) => {
+          console.log("booking redirect triggered from Ada", event);
+
+          try {
+            const globals = event?.user_data?.global || {};
+            const method = (globals.method || "post").toUpperCase();
+            const platform = globals.platform || "dsp";
+            const url = globals.url;
+
+            const fields = {
+              search: globals.search,
+              flowCode: globals.flowCode,
+              flowInfo: globals.flowInfo,
+              preferences: globals.preferences,
+              userConfig: globals.userConfig,
+            };
+
+            if (!url) {
+              throw new Error("No booking URL provided");
+            }
+
+            console.log("Redirecting via", method, "to", url, "platform:", platform, fields);
+
+            postForm(method, url, fields);
+          } catch (err) {
+            console.error("flight_booking handler error:", err);
+          }
+        },
+      };
+
+      SREAC_EVENTS.forEach((name) => {
+        eventCallbacks[name] = handleSreac;
+      });
+
+      window.adaSettings = { eventCallbacks };
+    </script>
+  </head>
+
+</html>

@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MAS — Self-Reaccommodation relay</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --ink:#12161c; --muted:#5b6472;
+    --line:#e3e6ec; --brand:#00539f; --ok:#0d7a4b; --warn:#a8500a; --err:#b3261e;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#0f1216; --card:#161b22; --ink:#e8ecf1; --muted:#98a2b3;
+           --line:#242c36; --brand:#4da3ff; --ok:#4ade80; --warn:#fbbf24; --err:#f87171; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:720px;margin:0 auto;padding:32px 20px 64px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:16px}
+  h1{font-size:19px;margin:0 0 4px}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 10px}
+  p{margin:0 0 12px;color:var(--muted)}
+  .status{display:flex;gap:10px;align-items:flex-start;font-weight:600}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);margin-top:7px;flex:0 0 auto}
+  .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
+  button{font:inherit;font-weight:600;padding:10px 16px;border-radius:8px;border:1px solid var(--brand);
+         background:var(--brand);color:#fff;cursor:pointer}
+  button.ghost{background:transparent;color:var(--brand)}
+  button:disabled{opacity:.5;cursor:default}
+  textarea{width:100%;min-height:110px;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+           padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink)}
+  pre{margin:0;padding:12px;background:var(--bg);border:1px solid var(--line);border-radius:8px;
+      font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-x:auto;max-height:280px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+  code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--bg);
+       border:1px solid var(--line);border-radius:4px;padding:1px 5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <h1>Self-Reaccommodation redirect</h1>
+    <div class="status"><span class="dot" id="dot"></span><span id="status">Waiting for a payload…</span></div>
+    <div class="row">
+      <button id="go" disabled>Continue to Manage Booking</button>
+      <button class="ghost" id="copy" disabled>Copy payload</button>
+    </div>
+  </div>
+
+  <div class="card" id="payloadCard" hidden>
+    <h2>Captured payload</h2>
+    <pre id="payloadOut"></pre>
+  </div>
+
+  <div class="card">
+    <h2>Manual test</h2>
+    <p>Paste what the tool returned (the whole result, or just <code>payload_json</code>) and submit it without the bot.</p>
+    <textarea id="manual" spellcheck="false" placeholder='{"post_url":"https://uat.digital.airline.amadeus.com/mh/servicing/self-reaccommodation/retrieve?lang=en-GB","method":"POST","fields":{"recLoc":"D87LB2","lastName":"azira"}}'></textarea>
+    <div class="row"><button class="ghost" id="load">Load payload</button></div>
+  </div>
+
+  <div class="card">
+    <h2>Event log</h2>
+    <p>Every <code>ada:*</code> event this page sees, so you can confirm the key and shape your bot fires.</p>
+    <pre id="log">(nothing yet)</pre>
+  </div>
+
+</div>
+
+<script>
+/* ---------------------------------------------------------------------------
+   CONFIG — the only part you should need to edit.
+--------------------------------------------------------------------------- */
+const CONFIG = {
+  adaHandle:   "malaysiaairlines-sandbox",
+  adaCluster:  null,        // e.g. "us2"; null = default US cluster
+  startAda:    false,       // true = this page hosts the chat; false = chat lives on the parent page
+  headless:    false,
+
+  // Prefix subscription: a callback fires for every event whose key STARTS with
+  // this string. "ada:" catches everything (except ada:message:*), which is how
+  // you discover the key your fire-event actually uses. Narrow it once known.
+  eventKey:    "ada:",
+
+  // Hard allow-list. The page will not POST anywhere else — without this it is
+  // an open redirect/POST relay for anyone who can reach it.
+  allowedHosts: ["uat.digital.airline.amadeus.com", "digital.airline.amadeus.com"],
+
+  // Page origins allowed to postMessage a payload in (same-origin always is).
+  allowedMessageOrigins: [],
+
+  autoSubmit:  true,        // submit as soon as a valid payload arrives
+  target:      "_blank",    // "_self" to replace this page, "_blank" for a new tab
+};
+
+/* --------------------------------------------------------------------- UI */
+const $ = (id) => document.getElementById(id);
+let current = null;
+
+function setStatus(text, kind) {
+  $("status").textContent = text;
+  $("dot").className = "dot" + (kind ? " " + kind : "");
+}
+function logLine(text) {
+  const el = $("log");
+  if (el.textContent === "(nothing yet)") el.textContent = "";
+  el.textContent += text + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+
+/* ------------------------------------------------------------- PAYLOAD IN */
+// Accepts, in any nesting: the tool result, {payload_json:"…"}, a raw JSON
+// string, or a bare {recLoc,lastName} pair alongside a post_url.
+function extractPayload(raw, depth) {
+  depth = depth || 0;
+  if (raw == null || depth > 6) return null;
+
+  if (typeof raw === "string") {
+    const text = raw.trim();
+    if (!text.startsWith("{") && !text.startsWith("[")) return null;
+    try { return extractPayload(JSON.parse(text), depth + 1); } catch { return null; }
+  }
+  if (Array.isArray(raw)) {
+    for (const item of raw) { const hit = extractPayload(item, depth + 1); if (hit) return hit; }
+    return null;
+  }
+  if (typeof raw !== "object") return null;
+
+  const url = raw.post_url || raw.postUrl || raw.action || raw.url;
+  const fields = raw.fields || raw.inputs || raw.form_fields;
+  if (typeof url === "string" && fields && typeof fields === "object") {
+    return {
+      post_url: url,
+      method: String(raw.method || "POST").toUpperCase(),
+      fields: fields,
+    };
+  }
+  for (const key of Object.keys(raw)) {
+    const hit = extractPayload(raw[key], depth + 1);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function accept(raw, source) {
+  const payload = extractPayload(raw);
+  if (!payload) { logLine("· " + source + ": no SREAC payload in it"); return false; }
+
+  let host;
+  try { host = new URL(payload.post_url).hostname; }
+  catch { setStatus("Payload rejected: post_url is not a valid URL.", "err"); return false; }
+
+  if (!CONFIG.allowedHosts.includes(host)) {
+    setStatus("Payload rejected: " + host + " is not on the allow-list.", "err");
+    logLine("· " + source + ": BLOCKED host " + host);
+    return false;
+  }
+
+  current = payload;
+  $("payloadCard").hidden = false;
+  $("payloadOut").textContent = JSON.stringify(payload, null, 2);
+  $("go").disabled = false;
+  $("copy").disabled = false;
+  setStatus("Payload received from " + source + ".", "ok");
+  logLine("✓ " + source + ": " + payload.post_url);
+
+  if (CONFIG.autoSubmit) submit();
+  return true;
+}
+
+/* --------------------------------------------------------------- POST OUT */
+function submit() {
+  if (!current) return;
+  const form = document.createElement("form");
+  form.method = current.method || "POST";
+  form.action = current.post_url;
+  form.target = CONFIG.target;
+  form.style.display = "none";
+
+  for (const [name, value] of Object.entries(current.fields)) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value == null ? "" : String(value);
+    form.appendChild(input);
+  }
+  document.body.appendChild(form);
+  form.submit();
+
+  setStatus(
+    CONFIG.target === "_blank"
+      ? "Submitted in a new tab. If nothing opened, your browser blocked the popup — press Continue."
+      : "Submitting…",
+    "ok"
+  );
+}
+
+/* -------------------------------------------------------------- SOURCES IN */
+// 1. URL fragment: #p=<base64url of the JSON>. The fragment is never sent to a
+//    server, so a link in chat can carry the payload without logging it.
+(function fromUrl() {
+  const carrier = new URLSearchParams(location.hash.slice(1)).get("p")
+               || new URLSearchParams(location.search).get("p");
+  if (!carrier) return;
+  try {
+    const binary = atob(carrier.replace(/-/g, "+").replace(/_/g, "/"));
+    const json = new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+    accept(json, "URL fragment");
+  } catch (error) {
+    logLine("· URL fragment: could not decode (" + error.message + ")");
+  }
+})();
+
+// 2. postMessage — for when the chat runs on a parent page and forwards to this
+//    page in an iframe. Same-origin only by default; add parent origins to
+//    CONFIG.allowedMessageOrigins deliberately, never "*".
+window.addEventListener("message", (event) => {
+  const trusted = event.origin === location.origin
+    || (CONFIG.allowedMessageOrigins || []).includes(event.origin);
+  if (!trusted) return;
+  accept(event.data, "postMessage");
+});
+
+// 3. Ada events.
+window.adaEmbed && subscribeAda();
+window.onAdaEmbedLoaded = subscribeAda;
+
+function subscribeAda() {
+  if (!window.adaEmbed || window.__sreacSubscribed) return;
+  window.__sreacSubscribed = true;
+
+  window.adaEmbed.subscribeEvent(CONFIG.eventKey, (data, context) => {
+    const key = (context && context.eventKey) || CONFIG.eventKey;
+    logLine("· " + key + " → " + JSON.stringify(data));
+    accept(data, key);
+  });
+
+  if (CONFIG.startAda) {
+    const options = { handle: CONFIG.adaHandle, headless: CONFIG.headless, enableProgrammaticControl: true };
+    if (CONFIG.adaCluster) options.cluster = CONFIG.adaCluster;
+    window.adaEmbed.start(options);
+  }
+  logLine("· subscribed to \"" + CONFIG.eventKey + "\"");
+}
+
+// 4. A global the bot's own JS (or your app) can call directly.
+window.SREAC = { submit: (raw) => accept(raw, "window.SREAC.submit") };
+
+/* ----------------------------------------------------------------- BUTTONS */
+$("go").addEventListener("click", submit);
+$("load").addEventListener("click", () => {
+  if (!accept($("manual").value, "manual paste")) setStatus("That text has no usable payload.", "warn");
+});
+$("copy").addEventListener("click", () => navigator.clipboard.writeText(JSON.stringify(current)));
+</script>
+
+<!-- Only needed if this page hosts the chat itself (CONFIG.startAda = true). -->
+<!-- <script id="__ada" data-handle="malaysiaairlines-sandbox" src="https://static.ada.support/embed2.js"></script> -->
+</body>
+</html>
