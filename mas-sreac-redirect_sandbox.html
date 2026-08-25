@@ -9,18 +9,49 @@
     ></script>
 
     <script>
-      // The event name configured on the "Self-Reac redirection" handoff.
-      // Aliases are registered too, so the page works whichever one you picked —
-      // trim this to the single real name once confirmed.
-      const SREAC_EVENTS = ["sreac", "sreac_redirect", "self_reac", "selfReac", "self_reaccommodation"];
+      // Set false once this is working to drop the on-page debug panel.
+      const SREAC_DEBUG = true;
 
-      // Hard allow-list for the POST target. Without it, any global that lands
-      // in sreac_action can make this page POST the customer anywhere.
+      // Used when the AI Agent has not populated sreac_action — lets the flow
+      // work before the code tool is wired up. Remove once the tool is live, so
+      // a stale URL can never be silently used in place of the real one.
+      const SREAC_DEFAULT_URL =
+        "https://uat.digital.airline.amadeus.com/mh/servicing/self-reaccommodation/retrieve?lang=en-GB";
+
+      // Hard allow-list for the POST target.
       const SREAC_ALLOWED_HOSTS = [
         "uat.digital.airline.amadeus.com",
         "digital.airline.amadeus.com",
       ];
 
+      /* ----------------------------------------------------------- debug UI */
+      let panel = null;
+
+      function debugPanel() {
+        if (!SREAC_DEBUG || panel || !document.body) return null;
+        panel = document.createElement("pre");
+        panel.style.cssText =
+          "position:fixed;left:12px;bottom:12px;z-index:2147483647;max-width:46vw;" +
+          "max-height:44vh;overflow:auto;margin:0;padding:10px 12px;border-radius:8px;" +
+          "background:#12161c;color:#e8ecf1;border:1px solid #2b3542;" +
+          "font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap";
+        panel.textContent = "ada event log\n";
+        document.body.appendChild(panel);
+        return panel;
+      }
+
+      function note(text, isError) {
+        console[isError ? "error" : "log"]("[sreac]", text);
+        const el = debugPanel();
+        if (!el) return;
+        const line = document.createElement("div");
+        if (isError) line.style.color = "#f87171";
+        line.textContent = text;
+        el.appendChild(line);
+        el.scrollTop = el.scrollHeight;
+      }
+
+      /* -------------------------------------------------------------- POST */
       function postForm(method, actionUrl, fields) {
         const form = document.createElement("form");
         form.method = method || "POST";
@@ -41,17 +72,17 @@
         form.submit();
       }
 
-      function handleSreac(event) {
-        console.log("self-reac redirect triggered from Ada", event);
+      /* ------------------------------------------------------------ SREAC */
+      function handleSreac(eventName, event) {
+        note("handling " + eventName + " as self-reac");
 
         try {
           const globals = event?.user_data?.global || {};
           const method = (globals.sreac_method || "post").toUpperCase();
-          const url = globals.sreac_action;
+          const url = globals.sreac_action || SREAC_DEFAULT_URL;
 
-          if (!url) {
-            throw new Error("No sreac_action URL on the event payload");
-          }
+          if (!url) throw new Error("No sreac_action on the event and no default URL");
+          if (!globals.sreac_action) note("sreac_action empty — using SREAC_DEFAULT_URL");
 
           const host = new URL(url).hostname;
           if (!SREAC_ALLOWED_HOSTS.includes(host)) {
@@ -59,7 +90,7 @@
           }
 
           // The code tool puts the parsed hidden inputs in sreacForm as JSON.
-          // If it isn't there, fall back to the two globals the playbook captured.
+          // Without it, fall back to the two globals the Playbook captured.
           let fields;
           if (globals.sreacForm) {
             fields =
@@ -67,58 +98,86 @@
                 ? JSON.parse(globals.sreacForm)
                 : globals.sreacForm;
           } else {
+            note("sreacForm empty — building fields from pnr + lastName");
             fields = { recLoc: globals.pnr, lastName: globals.lastName };
           }
 
           if (!fields.recLoc || !fields.lastName) {
-            throw new Error("Missing recLoc or lastName");
+            throw new Error(
+              "Missing recLoc/lastName. globals seen: " + Object.keys(globals).join(", ")
+            );
           }
 
-          console.log("Redirecting via", method, "to", url, fields);
-
+          note("POST " + url + " " + JSON.stringify(fields));
           postForm(method, url, fields);
         } catch (err) {
-          console.error("self-reac handler error:", err);
+          note("self-reac handler error: " + err.message, true);
         }
       }
 
-      const eventCallbacks = {
-        flight_booking: (event) => {
-          console.log("booking redirect triggered from Ada", event);
+      /* ---------------------------------------------------------- BOOKING */
+      function handleBooking(event) {
+        note("handling flight_booking");
 
-          try {
-            const globals = event?.user_data?.global || {};
-            const method = (globals.method || "post").toUpperCase();
-            const platform = globals.platform || "dsp";
-            const url = globals.url;
+        try {
+          const globals = event?.user_data?.global || {};
+          const method = (globals.method || "post").toUpperCase();
+          const platform = globals.platform || "dsp";
+          const url = globals.url;
 
-            const fields = {
-              search: globals.search,
-              flowCode: globals.flowCode,
-              flowInfo: globals.flowInfo,
-              preferences: globals.preferences,
-              userConfig: globals.userConfig,
-            };
+          const fields = {
+            search: globals.search,
+            flowCode: globals.flowCode,
+            flowInfo: globals.flowInfo,
+            preferences: globals.preferences,
+            userConfig: globals.userConfig,
+          };
 
-            if (!url) {
-              throw new Error("No booking URL provided");
-            }
+          if (!url) throw new Error("No booking URL provided");
 
-            console.log("Redirecting via", method, "to", url, "platform:", platform, fields);
+          note("POST " + url + " platform=" + platform);
+          postForm(method, url, fields);
+        } catch (err) {
+          note("flight_booking handler error: " + err.message, true);
+        }
+      }
 
-            postForm(method, url, fields);
-          } catch (err) {
-            console.error("flight_booking handler error:", err);
+      /* ---------------------------------------------------- event routing */
+      // Ada looks the callback up by the event name configured on the Handoff.
+      // Until that name is confirmed, a Proxy answers for ANY name: every event
+      // gets logged with its payload, and anything that isn't flight_booking is
+      // treated as the self-reac redirect. Replace with a plain object keyed by
+      // the real name once you can see it in the log.
+      const handlers = { flight_booking: handleBooking };
+
+      const eventCallbacks = new Proxy(handlers, {
+        get(target, prop, receiver) {
+          if (typeof prop !== "string" || prop === "then") {
+            return Reflect.get(target, prop, receiver);
           }
-        },
-      };
+          if (prop in target) return target[prop];
 
-      SREAC_EVENTS.forEach((name) => {
-        eventCallbacks[name] = handleSreac;
+          return (event) => {
+            note("event: " + prop);
+            note("  globals: " + JSON.stringify(event?.user_data?.global || {}));
+            handleSreac(prop, event);
+          };
+        },
+        has(target, prop) {
+          return typeof prop === "string" ? true : Reflect.has(target, prop);
+        },
       });
 
       window.adaSettings = { eventCallbacks };
+
+      if (SREAC_DEBUG) {
+        window.addEventListener("DOMContentLoaded", () => {
+          note("page ready — waiting for an Ada event");
+          note("handle: malaysiaairlines-sandbox, origin: " + location.origin);
+        });
+      }
     </script>
   </head>
 
+  <body></body>
 </html>
