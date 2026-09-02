@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="How a Malaysia Airlines booking is judged truly disrupted, and what the customer is entitled to as a result.">
+<meta name="robots" content="noindex">
+<title>MAG IROPS Detection Logic</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  /* minimal reset - the Artifact host injects one, GitHub Pages does not */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img, svg { max-width: 100%; }
+  table { border-collapse: collapse; }
+
+  :root {
+    --paper:      #f6f7f9;
+    --surface:    #ffffff;
+    --surface-2:  #eef1f5;
+    --ink:        #131922;
+    --ink-2:      #3d4658;
+    --slate:      #626d80;
+    --line:       #d6dbe3;
+    --line-soft:  #e5e9ef;
+    --accent:     #1a5c8a;
+    --accent-ink: #12456a;
+    --accent-wash:#e4eef5;
+    --cancel:     #a8342c;
+    --cancel-wash:#f7e6e4;
+    --retime:     #99650f;
+    --retime-wash:#f9eeda;
+    --ok:         #26705a;
+    --ok-wash:    #e2efea;
+    --shadow:     0 1px 2px rgba(19,25,34,.05), 0 6px 20px rgba(19,25,34,.05);
+
+    --f-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+    --f-body:    "Source Serif 4", Georgia, "Times New Roman", serif;
+    --f-mono:    "IBM Plex Mono", "SF Mono", Menlo, Consolas, monospace;
+
+    --measure: 68ch;
+    --wide: 1080px;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #0e131b;
+      --surface:    #161d27;
+      --surface-2:  #1d2632;
+      --ink:        #e8ecf2;
+      --ink-2:      #b6c0cf;
+      --slate:      #8b97a8;
+      --line:       #2c3644;
+      --line-soft:  #232c38;
+      --accent:     #6fb4de;
+      --accent-ink: #9bcdec;
+      --accent-wash:#16293a;
+      --cancel:     #e8887f;
+      --cancel-wash:#2e1a19;
+      --retime:     #d9a848;
+      --retime-wash:#2b2216;
+      --ok:         #6fbfa2;
+      --ok-wash:    #16281f;
+      --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #0e131b;
+    --surface:    #161d27;
+    --surface-2:  #1d2632;
+    --ink:        #e8ecf2;
+    --ink-2:      #b6c0cf;
+    --slate:      #8b97a8;
+    --line:       #2c3644;
+    --line-soft:  #232c38;
+    --accent:     #6fb4de;
+    --accent-ink: #9bcdec;
+    --accent-wash:#16293a;
+    --cancel:     #e8887f;
+    --cancel-wash:#2e1a19;
+    --retime:     #d9a848;
+    --retime-wash:#2b2216;
+    --ok:         #6fbfa2;
+    --ok-wash:    #16281f;
+    --shadow:     0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: var(--wide);
+    margin: 0 auto;
+    padding: 0 28px 96px;
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead {
+    border-bottom: 1px solid var(--line);
+    padding: 56px 0 30px;
+    margin-bottom: 44px;
+  }
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    font-weight: 500;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--slate);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-family: var(--f-display);
+    font-weight: 700;
+    font-size: clamp(2.1rem, 5vw, 3.1rem);
+    line-height: 1.06;
+    letter-spacing: -.022em;
+    margin: 0 0 18px;
+    text-wrap: balance;
+    max-width: 22ch;
+  }
+  .standfirst {
+    font-size: 1.16rem;
+    color: var(--ink-2);
+    max-width: var(--measure);
+    margin: 0;
+  }
+  .meta-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 30px;
+    margin-top: 28px;
+    font-family: var(--f-mono);
+    font-size: 12px;
+    color: var(--slate);
+  }
+  .meta-strip b {
+    color: var(--ink-2);
+    font-weight: 500;
+  }
+
+  /* ---------- layout ---------- */
+  .cols {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 44px;
+  }
+  @media (min-width: 1000px) {
+    .cols { grid-template-columns: 196px minmax(0,1fr); gap: 56px; }
+    .rail { position: sticky; top: 28px; align-self: start; }
+  }
+
+  .rail nav { border-left: 1px solid var(--line); }
+  .rail a {
+    display: block;
+    padding: 6px 0 6px 14px;
+    margin-left: -1px;
+    border-left: 2px solid transparent;
+    font-family: var(--f-display);
+    font-size: 13.5px;
+    font-weight: 500;
+    line-height: 1.35;
+    color: var(--slate);
+    text-decoration: none;
+  }
+  .rail a:hover { color: var(--accent); border-left-color: var(--accent); }
+  .rail a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .rail .rail-title {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--slate);
+    padding-left: 14px;
+    margin-bottom: 8px;
+  }
+
+  /* ---------- sections ---------- */
+  section { margin-bottom: 60px; scroll-margin-top: 24px; }
+  section > * { max-width: var(--measure); }
+  section > .full, section > figure, section > .tablewrap, section > .grid2, section > .cards { max-width: none; }
+
+  h2 {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: 1.62rem;
+    letter-spacing: -.014em;
+    line-height: 1.2;
+    margin: 0 0 6px;
+    text-wrap: balance;
+  }
+  .h2-num {
+    font-family: var(--f-mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--accent);
+    letter-spacing: .1em;
+  }
+  h3 {
+    font-family: var(--f-display);
+    font-weight: 600;
+    font-size: 1.06rem;
+    letter-spacing: -.005em;
+    margin: 32px 0 8px;
+  }
+  p { margin: 0 0 16px; }
+  a { color: var(--accent-ink); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  strong { font-weight: 600; }
+  code {
+    font-family: var(--f-mono);
+    font-size: .86em;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+    padding: .09em .34em;
+    word-break: break-word;
+  }
+  ul, ol { margin: 0 0 16px; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+
+  .lede {
+    font-size: 1.05rem;
+    color: var(--ink-2);
+    border-left: 2px solid var(--line);
+    padding-left: 18px;
+    margin-bottom: 26px;
+  }
+
+  /* ---------- callouts ---------- */
+  .note {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    border-radius: 0 6px 6px 0;
+    padding: 18px 22px;
+    margin: 0 0 22px;
+    box-shadow: var(--shadow);
+  }
+  .note.warn { border-left-color: var(--retime); }
+  .note.stop { border-left-color: var(--cancel); }
+  .note-label {
+    font-family: var(--f-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 7px;
+  }
+  .note.warn .note-label { color: var(--retime); }
+  .note.stop .note-label { color: var(--cancel); }
+  .note p:last-child { margin-bottom: 0; }
+
+  /* ---------- tables ---------- */
+  .tablewrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    margin: 0 0 14px;
+    box-shadow: var(--shadow);
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-family: var(--f-display);
+    font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  thead th {
+    text-align: left;
+    font-weight: 600;
+    font-size: 11px;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+    color: var(--slate);
+    background: var(--surface-2);
+    padding: 11px 15px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  tbody td {
+    padding: 11px 15px;
+    border-bottom: 1px solid var(--line-soft);
+    color: var(--ink-2);
+    vertical-align: top;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td.k { color: var(--ink); font-weight: 500; white-space: nowrap; }
+  td.mono, th.mono, .mono { font-family: var(--f-mono); }
+  caption {
+    caption-side: bottom;
+    text-align: left;
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    color: var(--slate);
+    padding: 11px 15px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  /* ---------- status pills ---------- */
+  .pill {
+    display: inline-block;
+    font-family: var(--f-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    padding: 2px 8px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .p-un { background: var(--cancel-wash); color: var(--cancel); }
+  .p-tk { background: var(--retime-wash); color: var(--retime); }
+  .p-ok { background: var(--ok-wash);     color: var(--ok); }
+  .p-ac { background: var(--accent-wash); color: var(--accent-ink); }
+
+  /* ---------- code block ---------- */
+  pre {
+    font-family: var(--f-mono);
+    font-size: 12.5px;
+    line-height: 1.62;
+    background: var(--surface);
+    color: var(--ink-2);
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 17px 19px;
+    overflow-x: auto;
+    margin: 0 0 20px;
+    box-shadow: var(--shadow);
+  }
+  pre b { color: var(--ink); font-weight: 600; }
+  pre .c { color: var(--slate); }
+
+  /* ---------- steps ---------- */
+  ol.steps { list-style: none; padding: 0; margin: 0 0 22px; counter-reset: s; }
+  ol.steps > li {
+    counter-increment: s;
+    position: relative;
+    padding-left: 44px;
+    margin-bottom: 20px;
+  }
+  ol.steps > li::before {
+    content: counter(s);
+    position: absolute;
+    left: 0; top: 1px;
+    width: 27px; height: 27px;
+    border-radius: 50%;
+    background: var(--accent-wash);
+    color: var(--accent-ink);
+    border: 1px solid var(--line);
+    font-family: var(--f-mono);
+    font-size: 12px;
+    font-weight: 600;
+    display: grid;
+    place-items: center;
+  }
+  ol.steps h3 { margin: 0 0 4px; }
+  ol.steps p { margin-bottom: 0; }
+
+  /* ---------- cards ---------- */
+  .cards { display: grid; gap: 14px; margin: 0 0 22px; }
+  @media (min-width: 720px) { .cards.c3 { grid-template-columns: repeat(3,1fr); } .cards.c2 { grid-template-columns: repeat(2,1fr); } }
+  .card {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    padding: 18px 19px;
+    box-shadow: var(--shadow);
+  }
+  .card h3 { margin: 9px 0 6px; font-size: 1rem; }
+  .card p { margin: 0; font-size: .94rem; color: var(--ink-2); }
+
+  /* ---------- figure ---------- */
+  figure { margin: 0 0 22px; }
+  figure svg { display: block; width: 100%; height: auto; }
+  .figframe {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--surface);
+    padding: 22px 18px;
+    overflow-x: auto;
+    box-shadow: var(--shadow);
+  }
+  figcaption {
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    color: var(--slate);
+    margin-top: 11px;
+    max-width: var(--measure);
+  }
+  .svg-ink   { fill: var(--ink); }
+  .svg-ink2  { fill: var(--ink-2); }
+  .svg-slate { fill: var(--slate); }
+  .svg-box   { fill: var(--surface-2); stroke: var(--line); }
+  .svg-line  { stroke: var(--slate); fill: none; }
+  .t-l { font-family: "IBM Plex Mono", monospace; font-size: 11px; }
+  .t-b { font-family: "Archivo", sans-serif; font-size: 12.5px; font-weight: 600; }
+  .t-n { font-family: "Archivo", sans-serif; font-size: 11.5px; }
+
+  hr.rule { border: 0; border-top: 1px solid var(--line); margin: 0 0 46px; max-width: none; }
+
+  footer {
+    border-top: 1px solid var(--line);
+    padding-top: 22px;
+    font-family: var(--f-mono);
+    font-size: 11.5px;
+    color: var(--slate);
+    max-width: none;
+  }
+  footer p { max-width: var(--measure); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Malaysia Airlines · Ada Sandbox · Reference</p>
+    <h1>MAG IROPS Detection Logic</h1>
+    <p class="standfirst">How a Malaysia Airlines booking is judged <em>truly disrupted</em>, how each cancelled flight is paired with its replacement, and what the passenger is entitled to as a result. This is the authoritative description of the logic now running in the sandbox.</p>
+    <div class="meta-strip">
+      <span><b>Instance</b> malaysiaairlines-sandbox</span>
+      <span><b>Status</b> Live &amp; verified</span>
+      <span><b>Verified against</b> 6 PNRs · 8 disruption rows</span>
+      <span><b>Last updated</b> 2 September 2026</span>
+    </div>
+  </header>
+
+  <div class="cols">
+    <aside class="rail">
+      <nav>
+        <p class="rail-title">Contents</p>
+        <a href="#source">Data source</a>
+        <a href="#codes">Status codes</a>
+        <a href="#live">The live itinerary</a>
+        <a href="#classify">Classifying a flight</a>
+        <a href="#entitlement">Entitlement</a>
+        <a href="#passengers">Multiple passengers</a>
+        <a href="#matrix">Notice windows</a>
+        <a href="#verify">Verification</a>
+        <a href="#impl">Implementation</a>
+        <a href="#platform">Platform constraints</a>
+        <a href="#gaps">Known gaps</a>
+      </nav>
+    </aside>
+
+    <main>
+
+      <section id="source">
+        <p class="h2-num">01</p>
+        <h2>Data source</h2>
+        <p class="lede">Every conclusion in this document is derived from one call. No other source is consulted, and nothing is inferred from the customer's own description of what happened.</p>
+
+        <div class="tablewrap">
+          <table>
+            <tbody>
+              <tr><td class="k">Endpoint</td><td class="mono">GET /api/rest/flight-booking/v1/bookings/{pnr}?lastName={lastName}</td></tr>
+              <tr><td class="k">Host</td><td class="mono">sandbox-api.malaysiaairlines.com</td></tr>
+              <tr><td class="k">Auth</td><td class="mono">Ocp-Apim-Subscription-Key header</td></tr>
+              <tr><td class="k">Ada web action</td><td class="mono">68e76ec39644634ce6b970df — “Retrieve customer booking details”</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Two branches of the response carry everything the logic needs:</p>
+        <ul>
+          <li><code>data.airBounds[].flights[]</code> — every flight <em>ever</em> attached to the booking, including dead segments.</li>
+          <li><code>data.passengers[].segments[].flightId</code> — the flights each passenger <em>currently holds</em>.</li>
+        </ul>
+
+        <div class="note stop">
+          <span class="note-label">Do not use as a disruption signal</span>
+          <p><code>data.status</code> remains <code>"confirmed"</code> even when flights on the booking are cancelled. Across all six test PNRs — four of which contain cancellations — it never once changed. Branching on it will silently classify every disrupted booking as healthy.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="codes">
+        <p class="h2-num">02</p>
+        <h2>Status codes</h2>
+        <p>Each flight carries a <code>statusCode</code> and a coarser <code>flightStatus</code>. The <code>statusCode</code> is the field to branch on; the API returns its own glossary at <code>dictionaries.statusCode</code>.</p>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Code</th><th>API name</th><th>Meaning in this logic</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><span class="pill p-un">UN</span></td>
+                <td>Unable, does not operate</td>
+                <td>Cancelled. The flight will not fly.</td>
+              </tr>
+              <tr>
+                <td><span class="pill p-tk">TK</span></td>
+                <td>Confirmed, timechange</td>
+                <td><strong>Ambiguous by itself.</strong> Either a genuine retime, or the replacement issued for a cancelled flight. Which one it is cannot be read off the code — see <a href="#classify">§04</a>.</td>
+              </tr>
+              <tr>
+                <td><span class="pill p-ok">HK</span></td>
+                <td>Holding confirmed</td>
+                <td>Confirmed, untouched.</td>
+              </tr>
+              <tr>
+                <td><span class="pill p-ok">KK</span></td>
+                <td>Confirmed</td>
+                <td>Confirmed, untouched.</td>
+              </tr>
+            </tbody>
+            <caption>Observed in <code>dictionaries.statusCode</code> across the six sandbox PNRs.</caption>
+          </table>
+        </div>
+
+        <div class="note warn">
+          <span class="note-label">Why TK cannot be counted naively</span>
+          <p>Treating every <code>TK</code> as a retime double-counts every reallocation: when a cancelled flight is replaced, the replacement is itself a <code>TK</code>. A booking with one cancellation and one replacement would be reported as <em>two</em> disruptions — a cancellation and a phantom retime.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="live">
+        <p class="h2-num">03</p>
+        <h2>The live itinerary</h2>
+        <p class="lede">This is the single most important distinction in the logic, and the one that is easiest to get wrong.</p>
+
+        <p><code>airBounds</code> is a <strong>history</strong>. It retains bounds the passenger no longer travels on. <code>passengers[].segments</code> is the <strong>live itinerary</strong> — what the passenger actually holds right now. When a cancelled flight is reallocated, the <code>UN</code> flight is <em>dropped from the passenger's segments</em> while remaining in <code>airBounds</code>.</p>
+
+        <p>That difference gives an exact test for reallocation:</p>
+
+        <div class="cards c2">
+          <div class="card">
+            <span class="pill p-un">UN still in segments</span>
+            <h3>Stranded</h3>
+            <p>Nothing was arranged. The passenger holds a flight that will not operate, and is refund-eligible.</p>
+          </div>
+          <div class="card">
+            <span class="pill p-ac">UN absent from segments</span>
+            <h3>Reallocated</h3>
+            <p>The passenger was moved. Their replacement is the live <code>TK</code> on the same origin → destination pair.</p>
+          </div>
+        </div>
+
+        <h3>Worked example — PNR D8AS2C</h3>
+        <p>This booking contains both shapes at once, which is why route-matching alone cannot resolve it. Both legs contain a <code>UN</code>; only one of them is genuinely stranded.</p>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>flightId</th><th>Flight</th><th>Route</th><th>Status</th><th>In airBounds</th><th>In segments</th><th>Conclusion</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="k mono">ST1</td><td class="mono">MH1208</td><td class="mono">KUL → AOR</td>
+                <td><span class="pill p-un">UN</span></td><td>yes</td><td><strong>no</strong></td>
+                <td>Reallocated to MH1252</td>
+              </tr>
+              <tr>
+                <td class="k mono">ST3</td><td class="mono">MH1252</td><td class="mono">KUL → AOR</td>
+                <td><span class="pill p-tk">TK</span></td><td>yes</td><td>yes</td>
+                <td>Is the replacement — <em>not</em> a retime</td>
+              </tr>
+              <tr>
+                <td class="k mono">ST2</td><td class="mono">MH1209</td><td class="mono">AOR → KUL</td>
+                <td><span class="pill p-un">UN</span></td><td>yes</td><td><strong>yes</strong></td>
+                <td>Stranded — refund-eligible</td>
+              </tr>
+            </tbody>
+            <caption>The passenger holds exactly ST3 and ST2. ST1 is history.</caption>
+          </table>
+        </div>
+
+        <div class="note warn">
+          <span class="note-label">Corollary</span>
+          <p>“Itinerary status” must always be read from <code>segments</code>, never from <code>airBounds</code>. Two of the six test PNRs (D87LB2, D8BO6B) contain a <code>UN</code> in <code>airBounds</code> that is <em>absent</em> from the live itinerary. Reading <code>airBounds</code> would wrongly downgrade both to refund-only.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="classify">
+        <p class="h2-num">04</p>
+        <h2>Classifying a flight</h2>
+        <p>The resolution runs in a fixed order, per passenger. Order matters: pairing must consume its replacement before retimes are counted, or the replacement is mistaken for an independent retime.</p>
+
+        <figure>
+          <div class="figframe">
+            <svg viewBox="0 0 720 300" role="img" aria-label="Decision flow: a UN flight held by the passenger is stranded; a UN flight not held is paired with a same-route TK; a TK not consumed as a replacement is a retime.">
+              <rect x="8" y="16" width="150" height="46" rx="5" class="svg-box"/>
+              <text x="83" y="36" text-anchor="middle" class="t-b svg-ink">Flight on booking</text>
+              <text x="83" y="52" text-anchor="middle" class="t-l svg-slate">statusCode</text>
+
+              <path d="M158 39 H206" class="svg-line" stroke-width="1.5"/>
+              <path d="M200 35 l6 4 -6 4 z" fill="var(--slate)" stroke="none"/>
+
+              <!-- UN branch -->
+              <rect x="206" y="8" width="118" height="30" rx="4" fill="var(--cancel-wash)" stroke="var(--cancel)" stroke-width="1"/>
+              <text x="265" y="27" text-anchor="middle" class="t-b" fill="var(--cancel)">UN — cancelled</text>
+
+              <!-- TK branch -->
+              <rect x="206" y="216" width="118" height="30" rx="4" fill="var(--retime-wash)" stroke="var(--retime)" stroke-width="1"/>
+              <text x="265" y="235" text-anchor="middle" class="t-b" fill="var(--retime)">TK — new time</text>
+              <path d="M182 39 V231 H206" class="svg-line" stroke-width="1.5"/>
+              <path d="M200 227 l6 4 -6 4 z" fill="var(--slate)" stroke="none"/>
+
+              <!-- UN sub-branches -->
+              <path d="M324 23 H360" class="svg-line" stroke-width="1.5"/>
+              <path d="M360 23 V74 H396" class="svg-line" stroke-width="1.5"/>
+              <path d="M360 23 V150 H396" class="svg-line" stroke-width="1.5"/>
+              <path d="M390 70 l6 4 -6 4 z" fill="var(--slate)" stroke="none"/>
+              <path d="M390 146 l6 4 -6 4 z" fill="var(--slate)" stroke="none"/>
+              <text x="366" y="60" class="t-l svg-slate">held?</text>
+
+              <rect x="396" y="56" width="316" height="38" rx="5" class="svg-box"/>
+              <text x="408" y="74" class="t-n svg-ink">Yes — in segments</text>
+              <text x="408" y="88" class="t-l svg-slate">cancel_no_transfer · stranded · refund-eligible</text>
+
+              <rect x="396" y="132" width="316" height="38" rx="5" class="svg-box"/>
+              <text x="408" y="150" class="t-n svg-ink">No — dropped, pair with same-route TK</text>
+              <text x="408" y="164" class="t-l svg-slate">cancel_with_transfer · consumes that TK</text>
+
+              <!-- TK sub-branches -->
+              <path d="M324 231 H360" class="svg-line" stroke-width="1.5"/>
+              <path d="M360 231 V198 H396" class="svg-line" stroke-width="1.5"/>
+              <path d="M360 231 V272 H396" class="svg-line" stroke-width="1.5"/>
+              <path d="M390 194 l6 4 -6 4 z" fill="var(--slate)" stroke="none"/>
+              <path d="M390 268 l6 4 -6 4 z" fill="var(--slate)" stroke="none"/>
+              <text x="366" y="248" class="t-l svg-slate">consumed?</text>
+
+              <rect x="396" y="182" width="316" height="32" rx="5" class="svg-box"/>
+              <text x="408" y="202" class="t-l svg-slate">Yes — already a replacement above. Not a disruption of its own.</text>
+
+              <rect x="396" y="256" width="316" height="38" rx="5" class="svg-box"/>
+              <text x="408" y="274" class="t-n svg-ink">No — genuine retime</text>
+              <text x="408" y="288" class="t-l svg-slate">retime · or delay when the flight number ends in “D”</text>
+            </svg>
+          </div>
+          <figcaption>Resolution order, per passenger. A UN is judged by whether the passenger still holds it; a TK is judged by whether something already claimed it.</figcaption>
+        </figure>
+
+        <ol class="steps">
+          <li>
+            <h3>Stranded cancellations first</h3>
+            <p>Any <code>UN</code> the passenger still holds is <code>cancel_no_transfer</code>. Nothing was arranged for them.</p>
+          </li>
+          <li>
+            <h3>Pair the dropped cancellations</h3>
+            <p>For each <code>UN</code> the passenger no longer holds, find a live <code>TK</code> they <em>do</em> hold on the same origin and destination; the nearest departure time wins. That <code>TK</code> is marked consumed. Result: <code>cancel_with_transfer</code>, or <code>reroute_other_airline</code> when the replacement's <code>operating.airlineCode</code> is not <code>MH</code>.</p>
+          </li>
+          <li>
+            <h3>Whatever TK is left is a real retime</h3>
+            <p>A held <code>TK</code> that no cancellation claimed is <code>retime</code> — or <code>delay</code> if its flight number ends in <code>D</code>.</p>
+          </li>
+        </ol>
+
+        <p><strong>Truly disrupted</strong> is then simply: the passenger has at least one classified event. A booking of only <code>HK</code> and <code>KK</code> produces none.</p>
+      </section>
+
+      <hr class="rule">
+
+      <section id="entitlement">
+        <p class="h2-num">05</p>
+        <h2>Entitlement</h2>
+        <p>What the customer may do is derived from <strong>whether an alternative flight actually exists on the booking</strong> — not from the disruption type, and not from how much notice they were given. A flight change requires that at least one cancellation was reallocated onto a replacement. If nothing was reallocated there is no new itinerary, and a refund is the only option.</p>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Booking condition</th><th>Entitlement</th><th>Offered</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>At least one cancellation <strong>reallocated</strong> onto a replacement — a New Itinerary exists</td>
+                <td class="k">refund_and_flight_change</td>
+                <td>Change my flight · Request a refund · Not at the moment</td>
+              </tr>
+              <tr>
+                <td>Disrupted, but <strong>nothing reallocated</strong> — no New Itinerary. Covers a stranded <span class="pill p-un">UN</span> and a <span class="pill p-tk">TK</span> retime alike</td>
+                <td class="k">refund_only</td>
+                <td>Request a refund · Do it later</td>
+              </tr>
+              <tr>
+                <td>No disruption at all — <span class="pill p-ok">HK</span> / <span class="pill p-ok">KK</span> only</td>
+                <td class="k">none</td>
+                <td>Not disrupted — itinerary plus a Manage My Booking link for extras and SSR</td>
+              </tr>
+              <tr>
+                <td colspan="2" class="k">Passengers differ</td>
+                <td class="k">mixed → human agent</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>Entitlement is a property of the whole booking, not of an individual flight. A booking that mixes a reallocated cancellation with a stranded one — D8AS2C — is entitled to <em>both</em> actions, because a replacement exists somewhere on it. The stranded leg is still shown explicitly as having no alternative, so the customer can see why a refund is on the table.</p>
+
+        <div class="note warn">
+          <span class="note-label">Consequence — retime-only bookings</span>
+          <p>Because a retime reallocates nothing, a booking whose only disruption is a retime is <strong>refund_only</strong>. DCM94C and DCU7EO both moved from refund-and-change to refund-only when this rule came in.</p>
+          <p>This supersedes an earlier rule under which any <code>TK</code> in the itinerary granted a flight change. The two are in direct conflict for retime-only bookings, and the reallocation rule is the one implemented. Reversing it is a one-line change in the code action's entitlement block.</p>
+        </div>
+
+        <h3>Manage My Booking is blocked while unresolved</h3>
+        <p>For any disrupted booking the customer is told, as its own closing paragraph, that they cannot make changes in Manage My Booking until the disruption is resolved — so it is better resolved in the conversation.</p>
+      </section>
+
+      <hr class="rule">
+
+      <section id="passengers">
+        <p class="h2-num">06</p>
+        <h2>Multiple passengers</h2>
+        <p>Classification runs <strong>per passenger</strong> and is never unioned across the booking. Passengers can be reaccommodated separately, and a union produces two distinct errors at once.</p>
+
+        <p>Consider four passengers on a cancelled MH003 where three are moved to MH001 and one is left behind:</p>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Approach</th><th>MH003</th><th>MH001</th><th>Reported entitlement</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="k">Union of all segments</td>
+                <td><span class="pill p-un">stranded</span></td>
+                <td><span class="pill p-tk">phantom retime</span></td>
+                <td>Single entitlement — the split is invisible</td>
+              </tr>
+              <tr>
+                <td class="k">Per passenger</td>
+                <td>Reallocated for 3 · stranded for 1</td>
+                <td>Correctly consumed as the replacement</td>
+                <td><code>mixed</code> → agent</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p>When passengers disagree, entitlement resolves to <code>mixed</code> and the conversation goes to a human rather than showing one button set that is wrong for somebody on the booking. Each disruption event also carries the passengers it affects, so an agent can see who needs what.</p>
+
+        <div class="note warn">
+          <span class="note-label">Not exercised by sandbox data</span>
+          <p>Only D8BO6B carries multiple passengers (4), and all four hold identical segments. The split-reaccommodation path is covered by synthetic tests only — no sandbox PNR reproduces it.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="matrix">
+        <p class="h2-num">07</p>
+        <h2>Notice windows</h2>
+        <p>Time-to-departure is still computed and exposed, but under the current entitlement rules it is <strong>informational</strong> — it no longer decides what the customer may do.</p>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Window</th><th>Time to departure</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="k mono">advance</td><td>More than 48 h</td></tr>
+              <tr><td class="k mono">irops_24_to_48h</td><td>24 h to 48 h</td></tr>
+              <tr><td class="k mono">irops_within_24h</td><td>Under 24 h</td></tr>
+              <tr><td class="k mono">departed</td><td>Departure already passed</td></tr>
+              <tr><td class="k mono">unknown</td><td>Clock unavailable or date unparseable</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="note stop">
+          <span class="note-label">Divergence from the MAG matrix</span>
+          <p>The original disruption matrix makes <em>cancel with no transfer</em> refund-only above 24 h but refund <em>or</em> flight change within 24 h. The reallocation rule has no such carve-out: with nothing reallocated the customer is refund-only regardless of notice. This is a deliberate consequence of the newer rule, and the two documents disagree here. It needs an owner's decision.</p>
+        </div>
+
+        <p>Two further matrix rows are only partially represented:</p>
+        <ul>
+          <li><strong>Retime, same flight number, next day — “Not Allowed”.</strong> Detected when a <code>UN</code> is replaced by a <code>TK</code> carrying the same flight number on a later date, and surfaced as <code>not_allowed_flights</code>. It does <em>not</em> currently suppress the buttons, because the newer rules do not mention the restriction.</li>
+          <li><strong>Delay in CM / “no change”.</strong> No field in the response distinguishes this from an untouched booking, so it cannot be detected.</li>
+        </ul>
+      </section>
+
+      <hr class="rule">
+
+      <section id="verify">
+        <p class="h2-num">08</p>
+        <h2>Verification</h2>
+        <p>The logic reproduces every row of the source disruption spreadsheet exactly — eight rows, no misses and no spurious extras — and each PNR was then replayed through the live agent.</p>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>PNR</th><th>Flight</th><th>Expected</th><th>Derived</th><th>Live agent</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="k mono">DCM94C</td><td class="mono">MH1209</td><td>Retime</td><td class="mono">retime</td><td><span class="pill p-ok">pass</span></td></tr>
+              <tr><td class="k mono">DCU7EO</td><td class="mono">MH2637</td><td>Retime</td><td class="mono">retime</td><td><span class="pill p-ok">pass</span></td></tr>
+              <tr><td class="k mono">D87LB2</td><td class="mono">MH1336</td><td>Retime</td><td class="mono">retime</td><td><span class="pill p-ok">pass</span></td></tr>
+              <tr><td class="k mono">D87LB2</td><td class="mono">MH1327</td><td>Cancel + reallocation</td><td class="mono">cancel_with_transfer</td><td><span class="pill p-ok">pass</span></td></tr>
+              <tr><td class="k mono">D8AS2C</td><td class="mono">MH1208</td><td>Cancel + reallocation</td><td class="mono">cancel_with_transfer</td><td><span class="pill p-ok">pass</span></td></tr>
+              <tr><td class="k mono">D8AS2C</td><td class="mono">MH1209</td><td>Cancellation</td><td class="mono">cancel_no_transfer</td><td><span class="pill p-ok">pass</span></td></tr>
+              <tr><td class="k mono">D8BO6B</td><td class="mono">MH003</td><td>Cancel + reallocation</td><td class="mono">cancel_with_transfer</td><td><span class="pill p-ok">pass</span></td></tr>
+              <tr><td class="k mono">D8LME5</td><td class="mono">MH250</td><td>Cancel + reallocation</td><td class="mono">cancel_with_transfer</td><td><span class="pill p-ok">pass</span></td></tr>
+            </tbody>
+            <caption>All PNRs use last name “Azira”. Live column = replayed end-to-end through the agent, including both handoff buttons. DCM94C and DCU7EO classify correctly as retimes but are <strong>refund_only</strong>, having no reallocation; the other four are refund-and-change.</caption>
+          </table>
+        </div>
+
+        <p>Alongside these, 17 synthetic cases cover each notice window, other-airline reroute, the not-allowed shape, already-departed flights, absent passenger data, JSON and Python-repr payloads, and malformed input. None raises an exception.</p>
+
+        <div class="note warn">
+          <span class="note-label">Untested in the sandbox</span>
+          <p>No PNR in the set is undisrupted, so the fully-confirmed path — itinerary plus the SSR / Manage My Booking link — is covered only by unit tests. Every PNR also departs 28 to 64 days out, which means all six land in <code>advance</code>; the two IROPS windows have never been exercised against real data. Near-dated PNRs and one clean booking would close both gaps.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="impl">
+        <p class="h2-num">09</p>
+        <h2>Implementation</h2>
+
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Component</th><th>ID</th><th>Role</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="k">Playbook</td><td class="mono">6a3bc5186b8ecb8e321118ba</td><td>[V2] Check Flight Cancellation by Last Name and PNR</td></tr>
+              <tr><td class="k">Web action</td><td class="mono">68e76ec39644634ce6b970df</td><td>Retrieve customer booking details</td></tr>
+              <tr><td class="k">Code action</td><td class="mono">6a979c96056ddde01bdcaef1</td><td>Detect flight disruption — all logic in this document</td></tr>
+              <tr><td class="k">Handoff</td><td class="mono">6a7ec68d6bee17bd655d0f9c</td><td>Self-reaccommodation tool — refund and flight change</td></tr>
+              <tr><td class="k">Handoff</td><td class="mono">682ad1e9ee4dc2d58e1bc9e1</td><td>Human agent — used for <code>mixed</code></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Playbook shape</h3>
+        <pre><b>1</b>  Ask PNR                     <span class="c">ask → pnr</span>
+<b>2</b>  Ask last name               <span class="c">ask → lastName</span>
+<b>3</b>  Retrieve booking            <span class="c">run action 68e76ec3…</span>
+<b>4</b>  Retry on lookup failure     <span class="c">if_else on booking_api_status, one retry, then agent</span>
+<b>5</b>  Detect disruption (silent)  <span class="c">run code action 6a979c96…</span>
+<b>6</b>  Respond by entitlement      <span class="c">if_else on disruption_entitlement</span>
+       ├─ refund_and_flight_change  <span class="c">details → 3 buttons → SREAC handoff</span>
+       ├─ refund_only               <span class="c">details → 2 buttons → SREAC handoff</span>
+       ├─ mixed                     <span class="c">→ human agent</span>
+       └─ none                      <span class="c">itinerary + Manage My Booking (SSR)</span></pre>
+
+        <p>Both the <em>Change my flight</em> and <em>Request a refund</em> buttons set <code>sreac_action</code> and then run the self-reaccommodation handoff. The handoff requires that variable to be populated first.</p>
+
+        <h3>Variables written by the code action</h3>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Variable</th><th>ID</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td class="k mono">disruption_entitlement</td><td class="mono">6a9797e77171fb864c7a8545</td><td>Drives the section 6 branch</td></tr>
+              <tr><td class="k mono">disruption_is_truly_disrupted</td><td class="mono">6a978ff40b88f4473342e7c4</td><td>Any classified event exists</td></tr>
+              <tr><td class="k mono">disruption_can_refund</td><td class="mono">6a9797e81a83deeb953109e7</td><td>Refund permitted</td></tr>
+              <tr><td class="k mono">disruption_can_change_flight</td><td class="mono">6a9797ea4229934a355ff301</td><td>Flight change permitted</td></tr>
+              <tr><td class="k mono">disruption_has_reallocation</td><td class="mono">— (result field)</td><td>Whether any replacement exists; the flight-change gate</td></tr>
+              <tr><td class="k mono">disruption_requires_agent</td><td class="mono">6a9797eb56c99de349ead0e7</td><td>Passengers diverge</td></tr>
+              <tr><td class="k mono">disruption_flights</td><td class="mono">6a978ffe25d0fa7b3044d759</td><td>Disrupted flights + replacements, for display</td></tr>
+              <tr><td class="k mono">disruption_confirmed_flights</td><td class="mono">6a979c9148ce21e73363f905</td><td>Untouched confirmed flights, for display</td></tr>
+              <tr><td class="k mono">disruption_refundable_flights</td><td class="mono">6a979000f7e42026cd5140a2</td><td>Flight numbers with no alternative</td></tr>
+              <tr><td class="k mono">disruption_itinerary_status</td><td class="mono">6a9797edb1bf5846227aac64</td><td>Live status codes present</td></tr>
+              <tr><td class="k mono">disruption_summary</td><td class="mono">6a978ff68035212385835d15</td><td>Coarse label for reporting</td></tr>
+              <tr><td class="k mono">disruption_notice_window</td><td class="mono">6a978ffc0777dbb316f93ce1</td><td>Informational only</td></tr>
+              <tr><td class="k mono">disruption_action_choice</td><td class="mono">6a97985463d21966c6ab8b26</td><td>Which button the customer pressed</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>General instructions</h3>
+        <p>The playbook carries cross-cutting rules so that follow-up questions asked <em>after</em> the summary stay consistent with it: state each flight's facts accurately, never describe a retime as a cancellation, never invent a flight, never reveal a status code, honour a stated choice instead of re-asking — and, decisively, never offer a flight change on a booking where nothing was reallocated.</p>
+
+        <div class="note">
+          <span class="note-label">Display steps receive finished data</span>
+          <p>The send steps do no analysis. Pairing, entitlement and grouping are all decided in code and handed over as variables; the step's only job is formatting. Both lists a message can print — <code>disruption_flights</code> and <code>disruption_confirmed_flights</code> — are explicit variables, because a step will quietly omit or invent flights it has to infer from context.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="platform">
+        <p class="h2-num">10</p>
+        <h2>Platform constraints</h2>
+        <p>Four behaviours of this instance shaped the implementation and will shape anyone else's. Each was diagnosed the hard way.</p>
+
+        <div class="cards c2">
+          <div class="card">
+            <h3><code>json</code> and <code>re</code> do not exist</h3>
+            <p>The code-action sandbox provides neither, despite the adacli documentation listing both as pre-provided. The literal parser and the ISO-8601 parser are hand-rolled on string operations. <code>datetime</code> is probed defensively and the logic degrades to <code>unknown</code> windows without it.</p>
+          </div>
+          <div class="card">
+            <h3>Variables arrive as Python repr</h3>
+            <p>Variable-bound inputs are delivered as strings using single quotes and <code>True</code> / <code>None</code> — not JSON. Declaring an input as <code>list</code> fails coercion outright with “not a valid list”. Inputs are declared <code>text</code> and parsed internally; the parser accepts both dialects.</p>
+          </div>
+          <div class="card">
+            <h3>No dry-run, no update</h3>
+            <p><code>code-actions test</code> returns 405, so snippets cannot be dry-run server-side. <code>PUT</code> is also 405, so every change is a delete-and-recreate, which mints a new action ID and requires re-pointing the playbook.</p>
+          </div>
+          <div class="card">
+            <h3>A failed run step aborts the playbook</h3>
+            <p>When the code action errored, the playbook exited and the reasoner independently chose the self-reaccommodation handoff — dropping the customer into the tool with no context. The mitigation is a code action that cannot fail: it returns a valid, conservative result for empty, truncated and malformed input alike.</p>
+          </div>
+        </div>
+
+        <div class="note warn">
+          <span class="note-label">Also worth knowing</span>
+          <p>A competing playbook, <em>[TEST v2] Booking Inquiry</em>, wins on generic phrasing such as “check my booking”. Disruption-specific wording is needed to route into this playbook during testing — and the overlap should be resolved before production.</p>
+        </div>
+      </section>
+
+      <hr class="rule">
+
+      <section id="gaps">
+        <p class="h2-num">11</p>
+        <h2>Known gaps</h2>
+        <p>Recorded so they are not rediscovered, roughly in order of how much they matter.</p>
+
+        <ol class="steps">
+          <li>
+            <h3>The reallocation rule is an inference</h3>
+            <p>That a reallocated <code>UN</code> is dropped from <code>passengers[].segments</code> reproduces all eight spreadsheet rows and is the only signal separating D8AS2C's two legs — but it is undocumented behaviour observed across six sandbox PNRs. It should be confirmed with the owner of the booking API, since it is now the load-bearing condition.</p>
+          </li>
+          <li>
+            <h3>Retime-only bookings lost the flight-change option</h3>
+            <p>Gating flight change on a reallocation means a retimed-but-not-reallocated booking is refund-only. That directly reverses the earlier rule under which any <code>TK</code> granted a flight change, and it is arguably counter-intuitive: a passenger whose flight moved by hours can no longer move themselves. Implemented as instructed; worth a second look.</p>
+          </li>
+          <li>
+            <h3>Can the self-reaccommodation tool rebook a stranded leg?</h3>
+            <p>On a booking with a reallocation elsewhere, the agent will tell a customer their stranded leg is eligible for a refund <em>or</em> a flight change, because entitlement is booking-level. Whether the tool can actually rebook a leg with no alternative is a property of SREAC that the booking data cannot answer. If it cannot, entitlement needs a per-flight qualifier.</p>
+          </li>
+          <li>
+            <h3>Entitlement contradicts the notice-window matrix</h3>
+            <p>See <a href="#matrix">§07</a>. Within 24 hours the matrix grants a flight change on a no-transfer cancellation; the status-composition rule does not.</p>
+          </li>
+          <li>
+            <h3>Refund and flight change hit the same URL</h3>
+            <p>Both buttons redirect to the same self-reaccommodation link. If the tool can deep-link to a specific intent, the parameter name is unknown and was not invented.</p>
+          </li>
+          <li>
+            <h3>Original schedules are never returned</h3>
+            <p>The response carries only current times, so a retime's magnitude is unknowable and “same flight number, next day” is detectable only in the <code>UN</code> + <code>TK</code> shape. Whether MAG ever represents that move as a bare <code>TK</code> is unconfirmed.</p>
+          </li>
+          <li>
+            <h3>Speak-to-an-agent is no longer a button</h3>
+            <p>The newer button sets do not include it, so it was dropped from the disrupted branches. Customers can still reach a human by asking, and <code>mixed</code> routes there automatically — but the explicit option is gone.</p>
+          </li>
+        </ol>
+      </section>
+
+      <footer>
+        <p>Logic verified against sandbox PNRs on 2 September 2026. Component IDs are specific to <span class="mono">malaysiaairlines-sandbox</span> and will differ in any other instance. Where this document and the original disruption matrix disagree, §07 records the divergence rather than resolving it.</p>
+      </footer>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>
