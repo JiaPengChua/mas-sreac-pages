@@ -680,7 +680,7 @@
       <section id="entitlement">
         <p class="h2-num">05</p>
         <h2>Entitlement</h2>
-        <p>What the customer may do is derived from <strong>whether an alternative flight actually exists on the booking</strong> — not from the disruption type, and not from how much notice they were given. A flight change requires that at least one cancellation was reallocated onto a replacement. If nothing was reallocated there is no new itinerary, and a refund is the only option.</p>
+        <p>What the customer may do is derived from <strong>whether they hold a flight at a new time</strong> — not from the disruption type, and not from how much notice they were given. A <code>TK</code> in the live itinerary grants both actions, whether that <code>TK</code> is a retime of their own flight or the replacement issued for a cancellation. Cancellations with no <code>TK</code> anywhere leave a refund as the only option, because nothing was arranged and there is no new itinerary to change.</p>
 
         <div class="tablewrap">
           <table>
@@ -689,12 +689,12 @@
             </thead>
             <tbody>
               <tr>
-                <td>At least one cancellation <strong>reallocated</strong> onto a replacement — a New Itinerary exists</td>
+                <td>Live itinerary holds a <span class="pill p-tk">TK</span> — a retime, or a replacement for a cancellation</td>
                 <td class="k">refund_and_flight_change</td>
                 <td>Change my flight · Request a refund · Not at the moment</td>
               </tr>
               <tr>
-                <td>Disrupted, but <strong>nothing reallocated</strong> — no New Itinerary. Covers a stranded <span class="pill p-un">UN</span> and a <span class="pill p-tk">TK</span> retime alike</td>
+                <td>Cancelled with <strong>no <span class="pill p-tk">TK</span> anywhere</strong> — nothing arranged, no new itinerary</td>
                 <td class="k">refund_only</td>
                 <td>Request a refund · Do it later</td>
               </tr>
@@ -711,12 +711,12 @@
           </table>
         </div>
 
-        <p>Entitlement is a property of the whole booking, not of an individual flight. A booking that mixes a reallocated cancellation with a stranded one — D8AS2C — is entitled to <em>both</em> actions, because a replacement exists somewhere on it. The stranded leg is still shown explicitly as having no alternative, so the customer can see why a refund is on the table.</p>
+        <p>Entitlement is a property of the whole booking, not of an individual flight. A booking that mixes a reallocated cancellation with a stranded one — D8AS2C — is entitled to <em>both</em> actions, because a <code>TK</code> exists somewhere on it. The stranded leg is still shown explicitly as having no alternative, so the customer can see why a refund is on the table.</p>
 
-        <div class="note warn">
-          <span class="note-label">Consequence — retime-only bookings</span>
-          <p>Because a retime reallocates nothing, a booking whose only disruption is a retime is <strong>refund_only</strong>. DCM94C and DCU7EO both moved from refund-and-change to refund-only when this rule came in.</p>
-          <p>This supersedes an earlier rule under which any <code>TK</code> in the itinerary granted a flight change. The two are in direct conflict for retime-only bookings, and the reallocation rule is the one implemented. Reversing it is a one-line change in the code action's entitlement block.</p>
+        <div class="note">
+          <span class="note-label">Why a retime grants a flight change</span>
+          <p>A retime reallocates nothing, so a stricter reading — “no reallocation, refund only” — would leave a retimed passenger unable to move themselves. That reading was tried and reverted: the MAG matrix lists <em>Retime / TK</em> as Refund-or-Flight-Change in both the Advance and IROPS 47–23 h blocks, so a retime carries the full entitlement.</p>
+          <p><code>refund_only</code> is therefore reserved for the genuinely stranded case: every disrupted flight cancelled, nothing arranged, no <code>TK</code> in the itinerary. An itinerary of <code>UN</code> + <code>HK</code> — one leg cancelled outright, another untouched — also lands here.</p>
         </div>
 
         <h3>Manage My Booking is blocked while unresolved</h3>
@@ -786,7 +786,7 @@
 
         <div class="note stop">
           <span class="note-label">Divergence from the MAG matrix</span>
-          <p>The original disruption matrix makes <em>cancel with no transfer</em> refund-only above 24 h but refund <em>or</em> flight change within 24 h. The reallocation rule has no such carve-out: with nothing reallocated the customer is refund-only regardless of notice. This is a deliberate consequence of the newer rule, and the two documents disagree here. It needs an owner's decision.</p>
+          <p>The original disruption matrix makes <em>cancel with no transfer</em> refund-only above 24 h but refund <em>or</em> flight change within 24 h. The status rule has no such carve-out: with no <code>TK</code> in the itinerary the customer is refund-only regardless of notice. This is the one place where the implemented logic and the matrix still disagree, and it needs an owner's decision.</p>
         </div>
 
         <p>Two further matrix rows are only partially represented:</p>
@@ -818,7 +818,7 @@
               <tr><td class="k mono">D8BO6B</td><td class="mono">MH003</td><td>Cancel + reallocation</td><td class="mono">cancel_with_transfer</td><td><span class="pill p-ok">pass</span></td></tr>
               <tr><td class="k mono">D8LME5</td><td class="mono">MH250</td><td>Cancel + reallocation</td><td class="mono">cancel_with_transfer</td><td><span class="pill p-ok">pass</span></td></tr>
             </tbody>
-            <caption>All PNRs use last name “Azira”. Live column = replayed end-to-end through the agent, including both handoff buttons. DCM94C and DCU7EO classify correctly as retimes but are <strong>refund_only</strong>, having no reallocation; the other four are refund-and-change.</caption>
+            <caption>All PNRs use last name “Azira”. Live column = replayed end-to-end through the agent, including both handoff buttons. All six hold a <code>TK</code>, so all six are refund-and-change; none exercises <code>refund_only</code>.</caption>
           </table>
         </div>
 
@@ -874,7 +874,7 @@
               <tr><td class="k mono">disruption_is_truly_disrupted</td><td class="mono">6a978ff40b88f4473342e7c4</td><td>Any classified event exists</td></tr>
               <tr><td class="k mono">disruption_can_refund</td><td class="mono">6a9797e81a83deeb953109e7</td><td>Refund permitted</td></tr>
               <tr><td class="k mono">disruption_can_change_flight</td><td class="mono">6a9797ea4229934a355ff301</td><td>Flight change permitted</td></tr>
-              <tr><td class="k mono">disruption_has_reallocation</td><td class="mono">— (result field)</td><td>Whether any replacement exists; the flight-change gate</td></tr>
+              <tr><td class="k mono">disruption_has_reallocation</td><td class="mono">— (result field)</td><td>Whether any cancellation was reallocated — reported, not the gate</td></tr>
               <tr><td class="k mono">disruption_requires_agent</td><td class="mono">6a9797eb56c99de349ead0e7</td><td>Passengers diverge</td></tr>
               <tr><td class="k mono">disruption_flights</td><td class="mono">6a978ffe25d0fa7b3044d759</td><td>Disrupted flights + replacements, for display</td></tr>
               <tr><td class="k mono">disruption_confirmed_flights</td><td class="mono">6a979c9148ce21e73363f905</td><td>Untouched confirmed flights, for display</td></tr>
@@ -888,7 +888,7 @@
         </div>
 
         <h3>General instructions</h3>
-        <p>The playbook carries cross-cutting rules so that follow-up questions asked <em>after</em> the summary stay consistent with it: state each flight's facts accurately, never describe a retime as a cancellation, never invent a flight, never reveal a status code, honour a stated choice instead of re-asking — and, decisively, never offer a flight change on a booking where nothing was reallocated.</p>
+        <p>The playbook carries cross-cutting rules so that follow-up questions asked <em>after</em> the summary stay consistent with it: state each flight's facts accurately, never describe a retime as a cancellation, never invent a flight, never reveal a status code, honour a stated choice instead of re-asking — and, decisively, never offer a flight change on a booking that is entitled to a refund only.</p>
 
         <div class="note">
           <span class="note-label">Display steps receive finished data</span>
@@ -941,8 +941,8 @@
             <p>That a reallocated <code>UN</code> is dropped from <code>passengers[].segments</code> reproduces all eight spreadsheet rows and is the only signal separating D8AS2C's two legs — but it is undocumented behaviour observed across six sandbox PNRs. It should be confirmed with the owner of the booking API, since it is now the load-bearing condition.</p>
           </li>
           <li>
-            <h3>Retime-only bookings lost the flight-change option</h3>
-            <p>Gating flight change on a reallocation means a retimed-but-not-reallocated booking is refund-only. That directly reverses the earlier rule under which any <code>TK</code> granted a flight change, and it is arguably counter-intuitive: a passenger whose flight moved by hours can no longer move themselves. Implemented as instructed; worth a second look.</p>
+            <h3>No sandbox PNR exercises refund-only</h3>
+            <p>Every one of the six test PNRs holds a <code>TK</code>, so all six resolve to refund-and-change. The <code>refund_only</code> branch — its two-button prompt and its “no alternative was arranged” wording — is covered by unit tests only. A PNR whose flights are all cancelled with nothing rebooked would close this.</p>
           </li>
           <li>
             <h3>Can the self-reaccommodation tool rebook a stranded leg?</h3>
