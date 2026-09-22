@@ -1,6 +1,8 @@
+<!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
+    <title>MAS Self-Reaccommodation</title>
     <script
       id="__ada"
       data-handle="malaysiaairlines-sandbox"
@@ -9,239 +11,152 @@
     ></script>
 
     <script>
-      const SREAC_DEBUG = false;
+      /* ------------------------------------------------------------ config */
 
-      // "navigate" — send the browser straight to the URL the Playbook built in
-      //              sreac_action. The MAS endpoint returns a self-submitting
-      //              form, so it performs the POST to Amadeus itself.
-      // "post"     — rebuild the form here and POST straight to Amadeus.
-      //              Needs sreac_action to be an Amadeus URL, from a code tool.
-      const SREAC_MODE = "navigate";
+      // Where a self-reaccommodation redirect goes when the AI Agent does not
+      // supply sreac_action itself. The endpoint answers with a self-submitting
+      // form and completes the rest of the redirect on its own.
+      const SREAC_ENDPOINT =
+        "https://sandbox-api.malaysiaairlines.com/refx/sreac/redirection/";
 
-      // navigate mode: the MAS endpoint, used to build the URL when the AI Agent
-      // did not supply sreac_action. Confirmed 2026-08-25: this instance's
-      // Unified Reasoning Engine SKIPS v2 SET steps, so a Playbook SET cannot
-      // populate sreac_action — only a tool run can. pnr and lastName do arrive.
-      const SREAC_ENDPOINT = "https://sandbox-api.malaysiaairlines.com/refx/sreac/redirection/";
-
-      // Hosts sreac_action is allowed to point at.
-      const SREAC_ENDPOINT_HOSTS = [
+      // sreac_action may only point at one of these hosts.
+      const SREAC_HOSTS = [
         "sandbox-api.malaysiaairlines.com",
         "api.malaysiaairlines.com",
       ];
 
-      // post mode
-      const SREAC_ALLOWED_HOSTS = [
-        "uat.digital.airline.amadeus.com",
-        "digital.airline.amadeus.com",
-      ];
+      const log = (message, isError) =>
+        console[isError ? "error" : "log"]("[sreac]", message);
 
-      /* ----------------------------------------------------------- debug UI */
-      let panel = null;
+      /* ------------------------------------------- self-reaccommodation */
 
-      function debugPanel() {
-        if (!SREAC_DEBUG || panel || !document.body) return null;
-        panel = document.createElement("pre");
-        panel.style.cssText =
-          "position:fixed;left:12px;bottom:12px;z-index:2147483647;max-width:46vw;" +
-          "max-height:44vh;overflow:auto;margin:0;padding:10px 12px;border-radius:8px;" +
-          "background:#12161c;color:#e8ecf1;border:1px solid #2b3542;" +
-          "font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap";
-        panel.textContent = "ada event log\n";
-        document.body.appendChild(panel);
-        return panel;
-      }
+      // The booking reference and last name, however the Agent supplied them.
+      function bookingDetails(globals) {
+        const form =
+          typeof globals.sreacForm === "string"
+            ? JSON.parse(globals.sreacForm)
+            : globals.sreacForm;
 
-      function note(text, isError) {
-        console[isError ? "error" : "log"]("[sreac]", text);
-        const el = debugPanel();
-        if (!el) return;
-        const line = document.createElement("div");
-        if (isError) line.style.color = "#f87171";
-        line.textContent = text;
-        el.appendChild(line);
-        el.scrollTop = el.scrollHeight;
-      }
-
-      function hostAllowed(url, hosts) {
-        return hosts.includes(new URL(url).hostname);
-      }
-
-      /* -------------------------------------------------------------- POST */
-      function postForm(method, actionUrl, fields) {
-        const form = document.createElement("form");
-        form.method = method || "POST";
-        form.action = actionUrl;
-        form.target = "_self";
-        form.style.display = "none";
-
-        Object.entries(fields || {}).forEach(([key, value]) => {
-          if (value === undefined || value === null || value === "") return;
-          const input = document.createElement("input");
-          input.type = "hidden";
-          input.name = key;
-          input.value = typeof value === "string" ? value : JSON.stringify(value);
-          form.appendChild(input);
-        });
-
-        document.body.appendChild(form);
-        form.submit();
-      }
-
-      /* ------------------------------------------------------------ SREAC */
-      function sreacFields(globals) {
-        // The code tool, when present, puts the parsed hidden inputs in
-        // sreacForm. Otherwise use the two values the Playbook captured.
-        if (globals.sreacForm) {
-          const parsed =
-            typeof globals.sreacForm === "string"
-              ? JSON.parse(globals.sreacForm)
-              : globals.sreacForm;
-          if (parsed && parsed.recLoc && parsed.lastName) return parsed;
-          note("sreacForm carried no recLoc/lastName — falling back to pnr + lastName");
-        }
+        if (form?.recLoc && form?.lastName) return form;
         return { recLoc: globals.pnr, lastName: globals.lastName };
       }
 
-      function buildEndpointUrl(globals) {
-        const fields = sreacFields(globals);
-        if (!fields.recLoc || !fields.lastName) {
+      // Build the redirect URL here. Needed because this instance's reasoning
+      // engine skips v2 SET steps, so a Playbook cannot populate sreac_action —
+      // only a tool run can. pnr and lastName do arrive.
+      function buildRedirectUrl(globals) {
+        const { recLoc, lastName } = bookingDetails(globals);
+
+        if (!recLoc || !lastName) {
           throw new Error(
-            "No sreac_action, and no pnr/lastName to build one from. globals seen: "
-            + Object.keys(globals).join(", ")
+            "No sreac_action, and no pnr/lastName to build one from. Globals: " +
+              Object.keys(globals).join(", ")
           );
         }
+
         const query = new URLSearchParams({
-          identifier: fields.recLoc,
-          lastName: fields.lastName,
+          identifier: recLoc,
+          lastName: lastName,
           lang: globals.lang || "en-GB",
         });
         return SREAC_ENDPOINT + "?" + query.toString();
       }
 
-      function navigateToAction(globals) {
+      // "NONE" is the tool's failure signal, and a leftover {{token}} means a
+      // Playbook wrote the literal token rather than the value — redirecting on
+      // either would carry a broken booking reference downstream.
+      function redirectTarget(globals) {
         const supplied = globals.sreac_action;
-        let target;
+        const usable =
+          supplied && supplied !== "NONE" && !supplied.includes("{{");
 
-        if (supplied && supplied !== "NONE") {
-          // An unresolved template means a Playbook SET wrote the literal token
-          // rather than the value. Navigating would send a broken PNR to MAS.
-          if (supplied.includes("{{") || supplied.includes("}}")) {
-            note("sreac_action holds an unresolved token — building the URL here "
-              + "instead: " + supplied, true);
-            target = buildEndpointUrl(globals);
-          } else {
-            target = supplied;
-          }
-        } else {
-          note("sreac_action not supplied — building the URL from pnr + lastName");
-          target = buildEndpointUrl(globals);
+        if (supplied && !usable) {
+          log("ignoring unusable sreac_action: " + supplied, true);
         }
-
-        if (!hostAllowed(target, SREAC_ENDPOINT_HOSTS)) {
-          throw new Error("Refusing to navigate to un-allow-listed host: " + new URL(target).hostname);
-        }
-
-        note("navigating to " + target);
-        window.location.href = target;
+        return usable ? supplied : buildRedirectUrl(globals);
       }
 
-      function postToAmadeus(globals, fields) {
-        // "NONE" is the code tool's failure signal. Do not fall back to the
-        // hardcoded URL there — posting anyway would look identical to success.
-        const url = globals.sreac_action;
-        if (!url || url === "NONE") {
-          throw new Error("The AI Agent could not resolve a redirect target (sreac_action=" + url + ")");
-        }
-        if (!hostAllowed(url, SREAC_ALLOWED_HOSTS)) {
-          throw new Error("Refusing to POST to un-allow-listed host: " + new URL(url).hostname);
-        }
-        const method = (globals.sreac_method || "post").toUpperCase();
-        note("POST " + url + " " + JSON.stringify(fields));
-        postForm(method, url, fields);
-      }
-
-      function handleSreac(eventName, event) {
-        note("handling " + eventName + " as self-reac, mode=" + SREAC_MODE);
+      function handleSreacRedirect(eventName, event) {
+        const globals = event?.user_data?.global || {};
+        log("event " + eventName + ", globals: " + JSON.stringify(globals));
 
         try {
-          const globals = event?.user_data?.global || {};
+          const target = redirectTarget(globals);
+          const { hostname } = new URL(target);
 
-          if (SREAC_MODE === "navigate") {
-            navigateToAction(globals);
-            return;
+          if (!SREAC_HOSTS.includes(hostname)) {
+            throw new Error("host is not allow-listed: " + hostname);
           }
 
-          const fields = sreacFields(globals);
-          if (!fields.recLoc || !fields.lastName) {
-            throw new Error(
-              "Missing recLoc/lastName. globals seen: " + Object.keys(globals).join(", ")
-            );
-          }
-          postToAmadeus(globals, fields);
+          log("redirecting to " + target);
+          window.location.href = target;
         } catch (err) {
-          note("self-reac handler error: " + err.message, true);
+          log("redirect failed — " + err.message, true);
         }
       }
 
-      /* ---------------------------------------------------------- BOOKING */
+      /* ----------------------------------------------------------- booking */
+
       function handleBooking(event) {
-        note("handling flight_booking");
+        const globals = event?.user_data?.global || {};
 
         try {
-          const globals = event?.user_data?.global || {};
-          const method = (globals.method || "post").toUpperCase();
-          const platform = globals.platform || "dsp";
-          const url = globals.url;
+          if (!globals.url) throw new Error("no booking URL provided");
 
-          const fields = {
+          log("posting booking to " + globals.url);
+          postForm(globals.method || "POST", globals.url, {
             search: globals.search,
             flowCode: globals.flowCode,
             flowInfo: globals.flowInfo,
             preferences: globals.preferences,
             userConfig: globals.userConfig,
-          };
-
-          if (!url) throw new Error("No booking URL provided");
-
-          note("POST " + url + " platform=" + platform);
-          postForm(method, url, fields);
+          });
         } catch (err) {
-          note("flight_booking handler error: " + err.message, true);
+          log("booking failed — " + err.message, true);
         }
       }
 
-      /* ---------------------------------------------------- event routing */
-      // Ada looks the callback up by the event name set on the Handoff. Until
-      // that name is confirmed, a Proxy answers for ANY name: every event is
-      // logged, and anything that isn't flight_booking is treated as self-reac.
-      const handlers = { flight_booking: handleBooking };
+      function postForm(method, action, fields) {
+        const form = document.createElement("form");
+        form.method = method;
+        form.action = action;
+        form.style.display = "none";
 
-      const eventCallbacks = new Proxy(handlers, {
-        get(target, prop, receiver) {
-          if (typeof prop !== "string" || prop === "then") {
-            return Reflect.get(target, prop, receiver);
-          }
-          if (prop in target) return target[prop];
+        for (const [name, value] of Object.entries(fields)) {
+          if (value === undefined || value === null || value === "") continue;
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = name;
+          input.value =
+            typeof value === "string" ? value : JSON.stringify(value);
+          form.appendChild(input);
+        }
 
-          return (event) => {
-            note("event: " + prop);
-            note("  globals: " + JSON.stringify(event?.user_data?.global || {}));
-            handleSreac(prop, event);
-          };
-        },
-        has(target, prop) {
-          return typeof prop === "string" ? true : Reflect.has(target, prop);
-        },
-      });
-
-      window.adaSettings = { eventCallbacks };
-
-      if (SREAC_DEBUG) {
-        window.addEventListener("DOMContentLoaded", () => {
-          note("page ready, mode=" + SREAC_MODE + " — waiting for an Ada event");
-        });
+        document.body.appendChild(form);
+        form.submit();
       }
+
+      /* ---------------------------------------------------- event routing */
+
+      // Ada looks the callback up by the event name set on the Handoff, and
+      // that name is not fixed yet — so this answers to ANY name.
+      // flight_booking is treated as a booking, everything else as a redirect.
+      window.adaSettings = {
+        eventCallbacks: new Proxy(
+          { flight_booking: handleBooking },
+          {
+            has: (handlers, name) =>
+              typeof name === "string" || Reflect.has(handlers, name),
+            get: (handlers, name) => {
+              if (typeof name !== "string" || name === "then") return undefined;
+              return (
+                handlers[name] ||
+                ((event) => handleSreacRedirect(name, event))
+              );
+            },
+          }
+        ),
+      };
     </script>
   </head>
 
