@@ -77,7 +77,7 @@
 
       // Every global except the control keys is POSTed, so fields added to the
       // payload later need no change here.
-      function redirectToBooking(event) {
+      function submitBooking(eventName, event) {
         try {
           const globals = event?.user_data?.global || {};
           const method = (globals.method || "post").toUpperCase();
@@ -95,19 +95,27 @@
             if (!CONTROL_KEYS.includes(key)) fields[key] = value;
           });
 
-          console.log("Redirecting via", method, "to", url, fields);
+          console.log(eventName, "redirecting via", method, "to", url, fields);
 
           postForm(method, url, fields);
         } catch (err) {
-          console.error("booking redirect handler error:", err);
+          console.error(eventName + " redirect handler error:", err);
         }
+      }
+
+      function redirectToBooking(event) {
+        submitBooking("flight_booking", event);
+      }
+
+      function redirectToExpBooking(event) {
+        submitBooking("express_booking", event);
       }
 
       window.adaSettings = {
         eventCallbacks: {
           flight_reaccommodation: redirectToSreac,
           flight_booking: redirectToBooking,
-          express_booking: redirectToBooking,
+          express_booking: redirectToExpBooking,
         },
       };
     </script>
