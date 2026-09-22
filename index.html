@@ -1,6 +1,9 @@
-<html>
+<!doctype html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MAS Self-Reaccommodation</title>
     <script
       id="__ada"
       data-handle="malaysiaairlines-sandbox"
@@ -9,41 +12,232 @@
     ></script>
 
     <script>
-      const SREAC_EVENT = "self_reac";
+      const ENVIRONMENT = "sandbox";
 
-      const SREAC_HOSTS = [
+      const ENDPOINTS = {
+        sandbox: "https://sandbox-api.malaysiaairlines.com/refx/sreac/redirection/",
+        production: "https://api.malaysiaairlines.com/refx/sreac/redirection/",
+      };
+
+      const ALLOWED_HOSTS = [
         "sandbox-api.malaysiaairlines.com",
         "api.malaysiaairlines.com",
       ];
 
-      function redirectToSreac(event) {
+      const BOOKING_REFERENCE = /^[A-Z0-9]{5,8}$/i;
+
+      const CONTROL_KEYS = ["url", "method", "platform"];
+
+      const BOOKING_EVENTS = ["flight_booking", "express_booking"];
+
+      const CONTACTS = [
+        ["1 300 88 3000", "Toll-free within Malaysia"],
+        ["+603 7843 3000", "Outside Malaysia"],
+      ];
+
+      const log = (...args) => console.log("[sreac]", ...args);
+      const warn = (...args) => console.warn("[sreac]", ...args);
+
+      function showFailure(reason) {
+        console.error("[sreac]", reason);
+        if (document.getElementById("sreac-failure")) return;
+
+        const banner = document.createElement("div");
+        banner.id = "sreac-failure";
+        banner.setAttribute("role", "alert");
+        banner.style.cssText =
+          "position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:2147483647;" +
+          "max-width:min(92vw,520px);padding:16px 20px;border-radius:10px;" +
+          "background:#fff;color:#101820;border:1px solid #d8dee6;" +
+          "box-shadow:0 6px 24px rgba(16,24,32,.18);" +
+          "font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif";
+
+        const heading = document.createElement("strong");
+        heading.textContent = "We could not open your booking";
+        heading.style.cssText = "display:block;margin-bottom:6px;font-size:15px";
+        banner.appendChild(heading);
+
+        const body = document.createElement("div");
+        body.textContent =
+          "Something went wrong transferring you. Please contact the Malaysia Airlines Global Contact Centre:";
+        banner.appendChild(body);
+
+        const list = document.createElement("div");
+        list.style.cssText = "margin-top:8px";
+        CONTACTS.forEach(([number, note]) => {
+          const row = document.createElement("div");
+          const link = document.createElement("a");
+          link.href = "tel:" + number.replace(/\s/g, "");
+          link.textContent = number;
+          link.style.cssText = "color:#2c69aa;font-weight:600;text-decoration:none";
+          row.appendChild(link);
+          row.appendChild(document.createTextNode(" — " + note));
+          list.appendChild(row);
+        });
+        banner.appendChild(list);
+
+        document.body.appendChild(banner);
+      }
+
+      function parseForm(value) {
+        if (!value) return null;
+        if (typeof value !== "string") return value;
         try {
-          const url = event?.user_data?.global?.sreac_action;
-
-          if (!url) {
-            throw new Error("No sreac_action provided");
-          }
-
-          const { hostname } = new URL(url);
-          if (!SREAC_HOSTS.includes(hostname)) {
-            throw new Error("Host is not allow-listed: " + hostname);
-          }
-
-          console.log("Redirecting to", url);
-          window.location.href = url;
+          return JSON.parse(value);
         } catch (err) {
-          console.error("sreac redirect handler error:", err);
+          warn("sreacForm is not valid JSON:", value);
+          return null;
         }
       }
 
-      window.adaSettings = {
-        eventCallbacks: {
-          [SREAC_EVENT]: (event) => {
-            console.log("sreac redirect triggered from Ada", event);
-            redirectToSreac(event);
+      function bookingDetails(globals) {
+        const form = parseForm(globals.sreacForm);
+        return {
+          recLoc: form?.recLoc || globals.pnr,
+          lastName: form?.lastName || globals.lastName,
+        };
+      }
+
+      function validateTarget(url) {
+        const parsed = new URL(url);
+
+        if (!ALLOWED_HOSTS.includes(parsed.hostname)) {
+          throw new Error("host is not allow-listed: " + parsed.hostname);
+        }
+
+        const identifier = parsed.searchParams.get("identifier");
+        if (identifier && !BOOKING_REFERENCE.test(identifier)) {
+          throw new Error("booking reference is malformed: " + identifier);
+        }
+
+        return url;
+      }
+
+      function buildRedirectUrl(globals) {
+        const { recLoc, lastName } = bookingDetails(globals);
+
+        if (!BOOKING_REFERENCE.test(recLoc || "")) {
+          throw new Error("booking reference is missing or malformed: " + recLoc);
+        }
+        if (!lastName) {
+          throw new Error("last name is missing");
+        }
+
+        const query = new URLSearchParams({
+          identifier: recLoc,
+          lastName: lastName,
+          lang: globals.lang || "en-GB",
+        });
+        return ENDPOINTS[ENVIRONMENT] + "?" + query.toString();
+      }
+
+      function resolveTarget(globals) {
+        const supplied = globals.sreac_action;
+
+        if (supplied && supplied !== "NONE" && !supplied.includes("{{")) {
+          try {
+            return validateTarget(supplied);
+          } catch (err) {
+            warn("ignoring sreac_action —", err.message);
+          }
+        }
+
+        return validateTarget(buildRedirectUrl(globals));
+      }
+
+      function handleSreacRedirect(eventName, event) {
+        const globals = event?.user_data?.global || {};
+        log("event", eventName, globals);
+
+        try {
+          const target = resolveTarget(globals);
+          log("redirecting to", target);
+          window.location.href = target;
+        } catch (err) {
+          showFailure("redirect failed — " + err.message);
+        }
+      }
+
+      function bookingFields(globals) {
+        const fields = {};
+
+        for (const [name, value] of Object.entries(globals)) {
+          if (CONTROL_KEYS.includes(name)) continue;
+          if (value === undefined || value === null || value === "") continue;
+          fields[name] =
+            typeof value === "string" ? value : JSON.stringify(value);
+        }
+
+        return fields;
+      }
+
+      function handleBooking(eventName, event) {
+        const globals = event?.user_data?.global || {};
+        log("event", eventName, globals);
+
+        try {
+          if (!globals.url) throw new Error("no booking URL provided");
+          if (new URL(globals.url).protocol !== "https:") {
+            throw new Error("booking URL is not https: " + globals.url);
+          }
+
+          const fields = bookingFields(globals);
+
+          const form = document.createElement("form");
+          form.method = globals.method || "POST";
+          form.action = globals.url;
+          form.style.display = "none";
+
+          for (const [name, value] of Object.entries(fields)) {
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = name;
+            input.value = value;
+            form.appendChild(input);
+          }
+
+          log("posting", Object.keys(fields).join(", "), "to", globals.url);
+          document.body.appendChild(form);
+          form.submit();
+        } catch (err) {
+          showFailure("booking failed — " + err.message);
+        }
+      }
+
+      function respondToAnyEventName(handlers) {
+        return new Proxy(handlers, {
+          has: (target, name) =>
+            typeof name === "string" || Reflect.has(target, name),
+          get: (target, name) => {
+            if (typeof name !== "string" || name === "then") return undefined;
+            if (BOOKING_EVENTS.includes(name)) {
+              return (event) => handleBooking(name, event);
+            }
+            return (event) => handleSreacRedirect(name, event);
           },
-        },
+        });
+      }
+
+      window.adaSettings = {
+        eventCallbacks: respondToAnyEventName({}),
       };
+
+      window.addEventListener("load", () => {
+        setTimeout(() => {
+          const loaded =
+            window.adaEmbed ||
+            document.getElementById("ada-button-frame") ||
+            document.querySelector("iframe[src*='ada']");
+
+          if (!loaded) {
+            showFailure(
+              "the chat widget did not load — this page's origin is probably not on the agent's iframe allow list"
+            );
+          }
+        }, 10000);
+      });
     </script>
   </head>
+
+  <body></body>
 </html>
